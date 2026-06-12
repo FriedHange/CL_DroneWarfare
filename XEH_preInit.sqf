@@ -26,7 +26,7 @@
     "SLIDER",
     ["Max Drone Targeting Range", "The maximum distance (in meters) the drone loop will scan for targets."],
     "CL Drone Warfare",
-    [200, 2500, 600, 0], // [Min, Max, Default, Decimals]
+    [200, 3000, 500, 0], // [Min, Max, Default, Decimals]
     1
 ] call CBA_fnc_addSetting;
 
@@ -36,7 +36,7 @@
     "SLIDER",
     ["Max Drone Operators Per Squad", "The maximum number of AI soldiers allowed to carry drone backpacks in a single group simultaneously."],
     "CL Drone Warfare",
-    [1, 5, 3, 0], 
+    [1, 10, 2, 0], 
     1
 ] call CBA_fnc_addSetting;
 
@@ -77,5 +77,25 @@
     ["Minimum Squad Size", "The minimum number of units required in a group before they can be assigned a drone backpack."],
     "CL Drone Warfare",
     [1, 12, 4, 0], 
+    1
+] call CBA_fnc_addSetting;
+
+// 8. Replace Existing Backpacks
+[
+    "CLDW_Setting_ReplaceBackpacks",
+    "CHECKBOX",
+    ["Replace Existing Backpacks", "If checked, the script will assign drone bags even to AI that already have backpacks (their old backpack will be deleted). If unchecked, only AI with empty back slots get drones."],
+    "CL Drone Warfare",
+    false,
+    1
+] call CBA_fnc_addSetting;
+
+// 9. Merge Drone Squad
+[
+    "CLDW_Setting_MergeDroneGroup",
+    "CHECKBOX",
+    ["Merge Drone with Assembler's Squad", "If checked, when a drone is assembled, its internal AI crew will be automatically moved into the squad of the soldier who assembled it, allowing them to share target information."],
+    "CL Drone Warfare",
+    true,
     1
 ] call CBA_fnc_addSetting;
