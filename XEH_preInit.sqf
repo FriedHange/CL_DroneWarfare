@@ -16,7 +16,7 @@
     "CHECKBOX",                      
     ["Allow Independent/Rebels", "If checked, Independent factions (like Antistasi Rebels) will be assigned drone backpacks."], 
     "CL Drone Warfare",              
-    true,                            
+    false,                            
     1                                
 ] call CBA_fnc_addSetting;
 
@@ -67,5 +67,15 @@
     ["Aggresive Drone Squads", "If true, a group will be set to Combat mode whenever one of its AI soldiers receives a drone backpack. Disabled by default to avoid disrupting existing group AI orders. Turn on for more aggressive FPV Warfare"],
     "CL Drone Warfare",
     false,
+    1
+] call CBA_fnc_addSetting;
+
+// 7. Minimum Squad Size for Drone Assignment
+[
+    "CLDW_Setting_MinSquadSize",
+    "SLIDER",
+    ["Minimum Squad Size", "The minimum number of units required in a group before they can be assigned a drone backpack."],
+    "CL Drone Warfare",
+    [1, 12, 4, 0], 
     1
 ] call CBA_fnc_addSetting;

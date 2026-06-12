@@ -26,7 +26,7 @@
                 private _maxAllowedDrones = CLDW_Setting_MaxDrones;
  
                 if (_currentDroneCount < _maxAllowedDrones) then { 
-                    if ((count units _group) >= 2) then { 
+                    if ((count units _group) >= CLDW_Setting_MinSquadSize) then { 
                         
                         private _sideDrones = switch (_groupSide) do { 
                             case blufor: { ["B_Crocus_AP_Bag", "B_Crocus_AT_Bag", "B_KVN_AP_Bag", "B_KVN_AT_Bag", "B_UAFPV_IED_AP_Bag", "B_UAFPV_OG7V_AP_Bag", "B_UAFPV_RKG_AP_Bag", "B_UAFPV_PG7VL_AT_Bag"] }; 
