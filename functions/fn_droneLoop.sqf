@@ -3,8 +3,9 @@
     private _isFirstRun = true;
  
     while {true} do { 
-        { 
-            private _group = _x; 
+        if (CLDW_Setting_EnableMod) then {
+            { 
+                private _group = _x; 
             private _groupSide = side _group;
  
             if (_groupSide != civilian) then { 
@@ -68,6 +69,7 @@
                 }; 
             }; 
         } forEach allGroups; 
+        };
  
         // CBA CHECK: Read sleep interval directly from menu slider dynamically
         if (_isFirstRun) then { _isFirstRun = false; sleep 1; } else { sleep CLDW_Setting_LoopSpeed; }; 

@@ -1,5 +1,15 @@
 // Inside P:\CL_DroneWarfare\XEH_preInit.sqf
 
+// 0. Master Toggle Switch
+[
+    "CLDW_Setting_EnableMod", 
+    "CHECKBOX",                      
+    ["Enable CL Drone Warfare", "If unchecked, the mod's background loop will pause and no new drones will be distributed."], 
+    "CL Drone Warfare",              
+    true,                            
+    1                                
+] call CBA_fnc_addSetting;
+
 // 1. Independent Faction Toggle Switch
 [
     "CLDW_Setting_AllowIndependent", 
