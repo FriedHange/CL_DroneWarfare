@@ -20,6 +20,26 @@
     1                                
 ] call CBA_fnc_addSetting;
 
+// 1.1. Blufor Faction Toggle Switch
+[
+    "CLDW_Setting_AllowBlufor", 
+    "CHECKBOX",                      
+    ["Allow Blufor", "If checked, Blufor factions will be assigned drone backpacks."], 
+    "CL Drone Warfare",              
+    true,                            
+    1                                
+] call CBA_fnc_addSetting;
+
+// 1.2. Opfor Faction Toggle Switch
+[
+    "CLDW_Setting_AllowOpfor", 
+    "CHECKBOX",                      
+    ["Allow Opfor", "If checked, Opfor factions will be assigned drone backpacks."], 
+    "CL Drone Warfare",              
+    true,                            
+    1                                
+] call CBA_fnc_addSetting;
+
 // 2. Target Tracking Proximity Cap
 [
     "CLDW_Setting_MaxRange",

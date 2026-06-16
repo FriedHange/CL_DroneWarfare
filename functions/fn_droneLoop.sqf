@@ -14,6 +14,12 @@
                 if (_groupSide == independent && {!CLDW_Setting_AllowIndependent}) then {
                     continue; 
                 };
+                if (_groupSide == blufor && {!CLDW_Setting_AllowBlufor}) then {
+                    continue; 
+                };
+                if (_groupSide == opfor && {!CLDW_Setting_AllowOpfor}) then {
+                    continue; 
+                };
 
                 // CBA CHECK: Exclude player's squad check
                 if (CLDW_Setting_ExcludePlayerGroup && {{isPlayer _x} count (units _group) > 0}) then {
