@@ -1,6 +1,6 @@
 DDT_fnc_getTargetsAT = {  
     private _man = _this select 0;  
-    private _range = (_this select 1) min CLDW_Setting_MaxRange; 
+    private _range = (_this select 1) min (round CLDW_Setting_MaxRange); 
     DDT_fnc_getTargetsAT_version = 3;  
   
     missionNamespace setVariable ["ddtCooldownValue", 0, true];  

@@ -15,6 +15,11 @@
                     continue; 
                 };
 
+                // CBA CHECK: Exclude player's squad check
+                if (CLDW_Setting_ExcludePlayerGroup && {{isPlayer _x} count (units _group) > 0}) then {
+                    continue;
+                };
+
                 private _currentOperators = _group getVariable ["_chosen_drone_operators_list", []]; 
                 _currentOperators = _currentOperators select { alive _x && {!isNull _x} };
                 _group setVariable ["_chosen_drone_operators_list", _currentOperators];
@@ -23,8 +28,8 @@
                 
                 // CBA CHECK: Scale drone distribution count dynamically based on menu slider
                 private _currentDroneCount = count _currentOperators;
-                private _maxAllowedDrones = missionNamespace getVariable ["CLDW_Setting_MaxDrones", 3];
-                private _minSquadSize = missionNamespace getVariable ["CLDW_Setting_MinSquadSize", 4];
+                private _maxAllowedDrones = round (missionNamespace getVariable ["CLDW_Setting_MaxDrones", 3]);
+                private _minSquadSize = round (missionNamespace getVariable ["CLDW_Setting_MinSquadSize", 4]);
  
                 if (_currentDroneCount < _maxAllowedDrones) then { 
                     if ((count units _group) >= _minSquadSize) then { 

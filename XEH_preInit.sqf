@@ -99,3 +99,13 @@
     true,
     1
 ] call CBA_fnc_addSetting;
+
+// 10. Exclude Player Group
+[
+    "CLDW_Setting_ExcludePlayerGroup",
+    "CHECKBOX",
+    ["Exclude Player's Squad", "If checked, the player's group/squad will not be automatically assigned drone backpacks."],
+    "CL Drone Warfare",
+    true,
+    1
+] call CBA_fnc_addSetting;
