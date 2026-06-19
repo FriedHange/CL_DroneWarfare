@@ -31,7 +31,12 @@ class CfgFunctions
             // Restored absolute path mapping to your functions directory
             file = "\CL_DroneWarfare\functions";
             class getTargetsAT {}; 
+            class getSoftTargets {};
             class droneLoop { postInit = 1; }; 
+            class guideToTarget {};
+            class move {};
+            class disengage {};
+            class droneGroupAlive {};
         };
     };
 };

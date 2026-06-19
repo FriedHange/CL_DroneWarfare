@@ -1,4 +1,18 @@
 [] spawn { 
+    // Wait for DDT mod to initialize, then apply overrides
+    [] spawn {
+        waitUntil { sleep 0.5; missionNamespace getVariable ["ddtReady", false] };
+        DDT_fnc_getTargetsAT = CLDW_fnc_getTargetsAT;
+        DDT_fnc_GetSoftTargets = CLDW_fnc_getSoftTargets;
+        DDT_fnc_GuideToTarget = CLDW_fnc_guideToTarget;
+        DDT_fnc_Move = CLDW_fnc_move;
+        DDT_fnc_DroneGroupAlive = CLDW_fnc_droneGroupAlive;
+        
+        if (missionNamespace getVariable ["ddtDebug", false]) then {
+            systemChat "CL Drone Warfare overrides applied successfully.";
+        };
+    };
+
     sleep 2; 
     private _isFirstRun = true;
  
@@ -112,6 +126,27 @@
                 }; 
             }; 
         } forEach allGroups; 
+        
+        // Re-engagement monitor for disengaged/idle drones
+        {
+            private _drone = _x;
+            if (alive _drone && {!(_drone getVariable ["CLDW_Disengaged", false])}) then {
+                private _man = _drone getVariable ["CLDW_CurrentOperator", objNull];
+                if (!isNull _man && {alive _man}) then {
+                    private _heartbeat = _drone getVariable ["CLDW_FPV_Running", 0];
+                    if (time > _heartbeat) then {
+                        // FPV loop is idle. Check if targets are available
+                        private _targets = [_man, 2000] call CLDW_fnc_getTargetsAT;
+                        if (count _targets > 0) then {
+                            if (missionNamespace getVariable ["ddtDebug", false]) then {
+                                systemChat format ["Idle drone %1 re-engaging target!", _drone];
+                            };
+                            [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+                        };
+                    };
+                };
+            };
+        } forEach (vehicles select { _x isKindOf "UAV" || _x isKindOf "Air" });
         };
  
         // CBA CHECK: Read sleep interval directly from menu slider dynamically
