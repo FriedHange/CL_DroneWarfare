@@ -43,4 +43,6 @@ if (!_isMerged) then {
 };
 _drone doMove _pos;
 _drone setSpeedMode "FULL";
+private _cruiseSpeed = (missionNamespace getVariable ["CLDW_Setting_CruiseSpeed", 85]) / 3.6;
+_drone forceSpeed _cruiseSpeed;
 _pos

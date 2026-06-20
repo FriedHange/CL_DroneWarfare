@@ -129,3 +129,23 @@
     true,
     1
 ] call CBA_fnc_addSetting;
+
+// 11. Drone Dive Attack Speed Slider
+[
+    "CLDW_Setting_DroneSpeed",
+    "SLIDER",
+    ["Drone Dive Attack Speed (km/h)", "The speed of the drone during the FPV terminal dive/attack phase in km/h."],
+    "CL Drone Warfare",
+    [50, 270, 125, 0], 
+    1
+] call CBA_fnc_addSetting;
+
+// 12. Drone Cruising Speed Slider
+[
+    "CLDW_Setting_CruiseSpeed",
+    "SLIDER",
+    ["Drone Cruising Speed (km/h)", "The speed of the drone when patrolling, moving, or returning to the squad in km/h."],
+    "CL Drone Warfare",
+    [30, 180, 85, 0], 
+    1
+] call CBA_fnc_addSetting;

@@ -13,15 +13,19 @@ private _crocusAT = [
     "B_CROCUS_AT", "O_CROCUS_AT", "I_CROCUS_AT", "B_CROCUS_AT_TI", "O_CROCUS_AT_TI", "I_CROCUS_AT_TI"
 ];
 
+private _droneSpeedSetting = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 125]) / 3.6;
 if ((toUpper (typeOf _drone)) in _crocusAT) then {
     _crocus = true;
-    _speed = 15;
+    _speed = _droneSpeedSetting;
 };
 if ((toUpper (typeOf _drone)) in _crocusAP) then {
     _crocus = true;
     _AP = true;
-    _speed = 15;
+    _speed = _droneSpeedSetting;
     _minDistanceToTarget = 1;
+};
+if (_speed < _droneSpeedSetting) then {
+    _speed = _droneSpeedSetting;
 };
 
 if (missionNamespace getVariable ["ddtDebug", false]) then {
@@ -30,6 +34,7 @@ if (missionNamespace getVariable ["ddtDebug", false]) then {
 
 _drone setCombatMode "BLUE";
 _drone setBehaviour "CARELESS";
+_drone forceSpeed -1; // Disable speed limits to allow manual FPV velocity overrides
 
 // Setup tracking variables
 private _targetLostTime = 0;
@@ -83,25 +88,56 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
         _lastValidTargetPos = _targetPos; // Keep refreshing last known position while we have sight
     };
 
+    // 2.1 OBSTACLE DETECTION (COLLISION GUARD): Check if a solid obstacle (building/terrain) is directly in our flight path
+    private _forwardVector = velocity _drone;
+    if (_forwardVector isNotEqualTo [0,0,0]) then {
+        private _normalizedForward = vectorNormalized _forwardVector;
+        private _checkDist = (_speed * 0.25) max 8; // Check ahead by 0.25 seconds of flight (minimum 8m)
+        private _pathEnd = _currentPos vectorAdd (_normalizedForward vectorMultiply _checkDist);
+        private _intersections = lineIntersectsSurfaces [_currentPos, _pathEnd, _drone, _target, true, 1, "VIEW", "FIRE"];
+        if (count _intersections > 0) then {
+            private _intersection = _intersections select 0;
+            private _intersectObj = _intersection select 2;
+            private _isTargetOrVehicle = (!isNull _intersectObj && { _intersectObj == _target || _intersectObj isKindOf "AllVehicles" });
+            if (!_isTargetOrVehicle) then {
+                _targetLostTime = 99; // Force immediate disengagement with distinct code
+                if (missionNamespace getVariable ["ddtDebug", false]) then {
+                    systemChat "Collision threat detected! Aborting dive to avoid crash.";
+                };
+            };
+        };
+    };
+
     if (_targetLostTime > _maxTimeWithoutLOS) exitWith {
         if (missionNamespace getVariable ["ddtDebug", false]) then {
-            systemChat format ["Target lost: LOS blocked for %1s", round _targetLostTime];
+            if (_targetLostTime > 90) then {
+                systemChat "Target lost: Collision threat ahead, disengaged.";
+            } else {
+                systemChat format ["Target lost: LOS blocked for %1s", round _targetLostTime];
+            };
         };
     };
 
     // 3. SMOOTH TURN RATE PHYSICS
+    // Lead prediction for moving targets: aim where the target will be when the drone intercepts it
+    private _targetVel = velocity _target;
+    private _timeToTarget = _dist / _speed;
+    private _leadTime = _timeToTarget min 1.5; // Cap prediction at 1.5 seconds ahead to avoid steering issues at long range
+    private _predictedPos = _targetPos vectorAdd (_targetVel vectorMultiply _leadTime);
+
     // When LOS is blocked steer toward last KNOWN position so the drone keeps committing
     // rather than awkwardly tracking a target it can't see through terrain.
     private _currentDir = vectorDirVisual _drone;
-    private _effectiveTargetPos = if (_losBlocked) then { _lastValidTargetPos } else { _targetPos };
+    private _effectiveTargetPos = if (_losBlocked) then { _lastValidTargetPos } else { _predictedPos };
     private _desiredDir = vectorNormalized (_effectiveTargetPos vectorDiff _currentPos);
 
     private _cos = _currentDir vectorDotProduct _desiredDir;
     _cos = (_cos min 1) max -1;
     private _angle = acos _cos;
 
-    // FPV drones are agile but still have limits. Set max turn rate to 75 deg/sec for AT, 90 for AP.
-    private _maxTurnRate = if (_AP) then { 90 } else { 75 };
+    // Scale turn rate and inertia dynamically with speed to keep steering tight and prevent overshoot
+    private _speedFactor = (_speed / 15) max 1;
+    private _maxTurnRate = (if (_AP) then { 90 } else { 75 }) * _speedFactor;
     private _maxTurnAngle = _maxTurnRate * _deltaTime;
 
     private _newDir = _currentDir;
@@ -125,7 +161,7 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
     private _desiredVelocity = _newDir vectorMultiply _speed;
 
     // Inertia response (AT drone is heavier/more slide, AP drone is lighter/faster response)
-    private _inertiaBlend = if (_AP) then { 0.12 } else { 0.08 };
+    private _inertiaBlend = (if (_AP) then { 0.12 } else { 0.08 }) * (_speedFactor min 2.0);
     private _newVelocity = (_currentVelocity vectorMultiply (1 - _inertiaBlend)) vectorAdd (_desiredVelocity vectorMultiply _inertiaBlend);
 
     _drone setVelocity _newVelocity;

@@ -118,6 +118,8 @@ if (_validTargets isEqualTo []) exitWith {
         if (_uavAlt < 3 && _uavSpeed < 2) then {
             private _launchPos = (getPosATL _uav) vectorAdd [0, 0, 50];
             _uav flyInHeightASL [50, 50, 50];
+            private _cruiseSpeed = (missionNamespace getVariable ["CLDW_Setting_CruiseSpeed", 85]) / 3.6;
+            _uav forceSpeed _cruiseSpeed;
             (driver _uav) doMove _launchPos;
         };
     };

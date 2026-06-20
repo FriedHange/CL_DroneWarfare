@@ -13,6 +13,67 @@
         };
     };
 
+    // Client-side safety: Prevent team-switching or remote-controlling drone crew units
+    if (hasInterface) then {
+        [] spawn {
+            // Wait for player to be initialized
+            waitUntil { !isNull player && {alive player} };
+            
+            // Instantly catch any TeamSwitch attempt to a UAV crew member
+            addMissionEventHandler ["TeamSwitch", {
+                params ["_previousUnit", "_newUnit"];
+                private _type = typeOf _newUnit;
+                private _isUAVCrew = (_type in ["B_UAV_AI", "O_UAV_AI", "I_UAV_AI"]) || 
+                                     {getText (configFile >> "CfgVehicles" >> _type >> "simulation") == "UAVPilot"} ||
+                                     {_newUnit getVariable ["CLDW_IsDroneCrew", false]};
+                if (_isUAVCrew) then {
+                    if (!isNull _previousUnit && {alive _previousUnit}) then {
+                        selectPlayer _previousUnit;
+                        systemChat "CLDW: Prevented switching to UAV crew unit.";
+                    };
+                };
+            }];
+
+            // Periodically verify player is not controlling a UAV crew unit
+            private _lastValidPlayer = player;
+            while {true} do {
+                private _p = player;
+                private _isUAVCrew = false;
+                if (!isNull _p) then {
+                    private _type = typeOf _p;
+                    if ((_type in ["B_UAV_AI", "O_UAV_AI", "I_UAV_AI"]) || 
+                        {getText (configFile >> "CfgVehicles" >> _type >> "simulation") == "UAVPilot"} ||
+                        {_p getVariable ["CLDW_IsDroneCrew", false]}) then {
+                        _isUAVCrew = true;
+                    };
+                };
+
+                if (_isUAVCrew) then {
+                    if (!isNull _lastValidPlayer && {alive _lastValidPlayer} && {_lastValidPlayer != _p}) then {
+                        selectPlayer _lastValidPlayer;
+                        systemChat "CLDW: Restored player from UAV crew unit.";
+                    } else {
+                        private _groupUnits = (units group _p) select { 
+                            alive _x && 
+                            {_x != _p} && 
+                            {!(typeOf _x in ["B_UAV_AI", "O_UAV_AI", "I_UAV_AI"])} &&
+                            {getText (configFile >> "CfgVehicles" >> typeOf _x >> "simulation") != "UAVPilot"}
+                        };
+                        if (count _groupUnits > 0) then {
+                            selectPlayer (_groupUnits select 0);
+                            systemChat "CLDW: Switched player to squad member.";
+                        };
+                    };
+                } else {
+                    if (!isNull _p && {alive _p}) then {
+                        _lastValidPlayer = _p;
+                    };
+                };
+                sleep 0.5;
+            };
+        };
+    };
+
     sleep 2; 
     private _isFirstRun = true;
  
@@ -28,10 +89,10 @@
                 if (_groupSide == independent && {!CLDW_Setting_AllowIndependent}) then {
                     continue; 
                 };
-                if (_groupSide == blufor && {!CLDW_Setting_AllowBlufor}) then {
+                if (_groupSide == west && {!CLDW_Setting_AllowBlufor}) then {
                     continue; 
                 };
-                if (_groupSide == opfor && {!CLDW_Setting_AllowOpfor}) then {
+                if (_groupSide == east && {!CLDW_Setting_AllowOpfor}) then {
                     continue; 
                 };
 
@@ -55,8 +116,8 @@
                     if ((count units _group) >= _minSquadSize) then { 
                         
                         private _sideDrones = switch (_groupSide) do { 
-                            case blufor: { ["B_Crocus_AP_Bag", "B_Crocus_AT_Bag", "B_KVN_AP_Bag", "B_KVN_AT_Bag", "B_UAFPV_IED_AP_Bag", "B_UAFPV_OG7V_AP_Bag", "B_UAFPV_RKG_AP_Bag", "B_UAFPV_PG7VL_AT_Bag"] }; 
-                            case opfor:  { ["O_Crocus_AP_Bag", "O_Crocus_AT_Bag", "O_KVN_AP_Bag", "O_KVN_AT_Bag", "O_UAFPV_IED_AP_Bag", "O_UAFPV_OG7V_AP_Bag", "O_UAFPV_RKG_AP_Bag", "O_UAFPV_PG7VL_AT_Bag"] }; 
+                            case west: { ["B_Crocus_AP_Bag", "B_Crocus_AT_Bag", "B_KVN_AP_Bag", "B_KVN_AT_Bag", "B_UAFPV_IED_AP_Bag", "B_UAFPV_OG7V_AP_Bag", "B_UAFPV_RKG_AP_Bag", "B_UAFPV_PG7VL_AT_Bag"] }; 
+                            case east:  { ["O_Crocus_AP_Bag", "O_Crocus_AT_Bag", "O_KVN_AP_Bag", "O_KVN_AT_Bag", "O_UAFPV_IED_AP_Bag", "O_UAFPV_OG7V_AP_Bag", "O_UAFPV_RKG_AP_Bag", "O_UAFPV_PG7VL_AT_Bag"] }; 
                             default      { ["I_Crocus_AP_Bag", "I_Crocus_AT_Bag", "I_KVN_AP_Bag", "I_KVN_AT_Bag", "I_UAFPV_IED_AP_Bag", "I_UAFPV_OG7V_AP_Bag", "I_UAFPV_RKG_AP_Bag", "I_UAFPV_PG7VL_AT_Bag"] }; 
                         }; 
             
@@ -98,7 +159,14 @@
                                                     if ((_type find "Crocus" > -1) || (_type find "KVN" > -1) || (_type find "UAFPV" > -1) || (_veh isKindOf "UAV")) then {
                                                         private _crew = crew _veh;
                                                         if (count _crew > 0 && {group (_crew select 0) != _grp}) then {
-                                                            _crew joinSilent _grp;
+                                                            { 
+                                                                _x setVariable ["CLDW_IsDroneCrew", true, true]; 
+                                                                if (_x in switchableUnits) then { removeSwitchableUnit _x; };
+                                                            } forEach _crew;
+                                                            // Avoid adding virtual crew to player-led or player-containing groups to prevent UI clutter and softlocks
+                                                            if (!({isPlayer _x} count (units _grp) > 0)) then {
+                                                                _crew joinSilent _grp;
+                                                            };
                                                         };
                                                     };
                                                 } forEach _drones;
@@ -147,6 +215,17 @@
                 };
             };
         } forEach (vehicles select { _x isKindOf "UAV" || _x isKindOf "Air" });
+
+        // Periodically remove all UAV crew units from switchable units list (protection override)
+        {
+            private _type = typeOf _x;
+            private _isUAVCrew = (_type in ["B_UAV_AI", "O_UAV_AI", "I_UAV_AI"]) || 
+                                 {getText (configFile >> "CfgVehicles" >> _type >> "simulation") == "UAVPilot"} ||
+                                 {_x getVariable ["CLDW_IsDroneCrew", false]};
+            if (_isUAVCrew) then {
+                if (_x in switchableUnits) then { removeSwitchableUnit _x; };
+            };
+        } forEach allUnits;
         };
  
         // CBA CHECK: Read sleep interval directly from menu slider dynamically

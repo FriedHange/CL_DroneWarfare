@@ -2,6 +2,10 @@ params [["_drone", objNull], ["_lastSeenPos", [0,0,0]], ["_man", objNull]];
 
 if (isNull _drone || {!alive _drone}) exitWith {};
 
+{
+    if (_x in switchableUnits) then { removeSwitchableUnit _x; };
+} forEach (crew _drone);
+
 // Resolve operator dynamically if dead/null (teleport/despawn guard)
 if (isNull _man || {!alive _man}) then {
     private _opGrp = _drone getVariable ["CLDW_OperatorGroup", grpNull];
@@ -35,6 +39,9 @@ _grp setBehaviour "AWARE";
 _grp setCombatMode "BLUE";
 
 if (!isNull _man && {alive _man}) then {
+    private _cruiseSpeed = (missionNamespace getVariable ["CLDW_Setting_CruiseSpeed", 85]) / 3.6;
+    _drone forceSpeed _cruiseSpeed;
+
     // Set destination immediately so the drone never hovers during the first sleep gap
     private _manPos2DImmediate = [getPosATL _man select 0, getPosATL _man select 1, 0];
     private _wpImmediate = _grp addWaypoint [_manPos2DImmediate, 15];
@@ -91,7 +98,8 @@ if (!isNull _man && {alive _man}) then {
     };
 
     private _opGrp = group _man;
-    if (!isNull _opGrp) then {
+    private _shouldJoin = !isNull _opGrp && {!({isPlayer _x} count (units _opGrp) > 0)};
+    if (_shouldJoin) then {
         (crew _drone) joinSilent _opGrp;
 
         // Wait for async joinSilent to complete before deleting temp group
@@ -103,15 +111,21 @@ if (!isNull _man && {alive _man}) then {
                 (group (_crew select 0) == _opGrp) || {time > _joinTimeout}
             };
         };
+
+        _drone setVariable ["CLDW_Disengaged", false, true];
+        _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+
+        sleep 1;
+        deleteGroup _grp;
+
+        [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+    } else {
+        // If the squad contains a player, keep the crew in the temporary group '_grp' to prevent UI clutter and softlocks
+        _drone setVariable ["CLDW_Disengaged", false, true];
+        _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+
+        [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
     };
-
-    _drone setVariable ["CLDW_Disengaged", false, true];
-    _drone setVariable ["CLDW_CurrentTarget", objNull, true];
-
-    sleep 1;
-    deleteGroup _grp;
-
-    [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
 } else {
     // Operator is dead — delete crew so drone crashes
     if (missionNamespace getVariable ["ddtDebug", false]) then {
