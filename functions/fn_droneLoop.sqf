@@ -161,6 +161,7 @@
                                                         if (count _crew > 0 && {group (_crew select 0) != _grp}) then {
                                                             { 
                                                                 _x setVariable ["CLDW_IsDroneCrew", true, true]; 
+                                                                _x setVariable ["USED", true, true];
                                                                 if (_x in switchableUnits) then { removeSwitchableUnit _x; };
                                                             } forEach _crew;
                                                             // Avoid adding virtual crew to player-led or player-containing groups to prevent UI clutter and softlocks
@@ -224,6 +225,9 @@
                                  {_x getVariable ["CLDW_IsDroneCrew", false]};
             if (_isUAVCrew) then {
                 if (_x in switchableUnits) then { removeSwitchableUnit _x; };
+                if (!(_x getVariable ["USED", false])) then {
+                    _x setVariable ["USED", true, true];
+                };
             };
         } forEach allUnits;
         };
