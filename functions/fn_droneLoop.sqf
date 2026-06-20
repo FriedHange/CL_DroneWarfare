@@ -48,7 +48,9 @@
                     };
                 };
 
-                if (_isUAVCrew) then {
+                private _isControllingUAV = !isNull (getConnectedUAV _p);
+
+                if (_isUAVCrew && !_isControllingUAV) then {
                     if (!isNull _lastValidPlayer && {alive _lastValidPlayer} && {_lastValidPlayer != _p}) then {
                         selectPlayer _lastValidPlayer;
                         systemChat "CLDW: Restored player from UAV crew unit.";
@@ -62,10 +64,21 @@
                         if (count _groupUnits > 0) then {
                             selectPlayer (_groupUnits select 0);
                             systemChat "CLDW: Switched player to squad member.";
+                        } else {
+                            systemChat "CLDW: No squad members left. Triggering respawn.";
+                            if (isMultiplayer) then {
+                                if (!isNil "RSTF_DEATH_SIDE") then {
+                                    RSTF_DEATH_SIDE spawn RSTFM_fnc_spawnPlayer;
+                                };
+                            } else {
+                                if (!isNil "RSTFM_fnc_playerKilled") then {
+                                    [player, objNull] call RSTFM_fnc_playerKilled;
+                                };
+                            };
                         };
                     };
                 } else {
-                    if (!isNull _p && {alive _p}) then {
+                    if (!_isUAVCrew && !isNull _p && {alive _p}) then {
                         _lastValidPlayer = _p;
                     };
                 };
