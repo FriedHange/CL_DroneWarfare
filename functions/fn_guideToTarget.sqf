@@ -32,9 +32,42 @@ if (missionNamespace getVariable ["ddtDebug", false]) then {
     systemChat format ["FPV attack speed: %1", _speed];
 };
 
+private _man = _drone getVariable ["CLDW_CurrentOperator", objNull];
+private _opGrp = _drone getVariable ["CLDW_OperatorGroup", grpNull];
+if (isNull _opGrp && {!isNull _man}) then {
+    _opGrp = group _man;
+};
+if (isNull _man || {!alive _man}) then {
+    if (!isNull _opGrp) then {
+        private _aliveUnits = (units _opGrp) select { alive _x };
+        if (count _aliveUnits > 0) then {
+            _man = leader _opGrp;
+            _drone setVariable ["CLDW_CurrentOperator", _man, true];
+        };
+    };
+};
+
+// Split drone crew from the operator group to prevent setting behavior/combat mode on the operator's group
+private _droneCrew = crew _drone;
+private _tempGrp = grpNull;
+private _hasSplitGroup = false;
+
+if (count _droneCrew > 0) then {
+    private _originalGrp = group (_droneCrew select 0);
+    if (!isNull _opGrp && {_originalGrp == _opGrp}) then {
+        _tempGrp = createGroup (side _drone);
+        _tempGrp setVariable ["daoExclude", true, true];
+        _tempGrp setVariable ["dceExclude", true, true];
+        _tempGrp setVariable ["Vcm_Disable", true, true];
+        _droneCrew joinSilent _tempGrp;
+        _hasSplitGroup = true;
+    };
+};
+
 _drone setCombatMode "BLUE";
 _drone setBehaviour "CARELESS";
 _drone forceSpeed -1; // Disable speed limits to allow manual FPV velocity overrides
+
 
 // Setup tracking variables
 private _targetLostTime = 0;
@@ -172,9 +205,9 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
 if (isNull _drone) exitWith {};
 
 // Check if we lost lock but the drone is still alive and has an operator
-private _man = _drone getVariable ["CLDW_CurrentOperator", objNull];
+_man = _drone getVariable ["CLDW_CurrentOperator", objNull];
 if (isNull _man || {!alive _man}) then {
-    private _opGrp = _drone getVariable ["CLDW_OperatorGroup", grpNull];
+    _opGrp = _drone getVariable ["CLDW_OperatorGroup", grpNull];
     if (!isNull _opGrp) then {
         private _aliveUnits = (units _opGrp) select { alive _x };
         if (count _aliveUnits > 0) then {
@@ -223,6 +256,10 @@ if (_closeEnough) then {
             if (alive _drone && {!isNull _man}) then {
                 if (missionNamespace getVariable ["ddtDebug", false]) then {
                     systemChat "Drone: LOS lost, re-acquiring target...";
+                };
+                if (_hasSplitGroup && {!isNull _opGrp}) then {
+                    (crew _drone) joinSilent _opGrp;
+                    deleteGroup _tempGrp;
                 };
                 _drone enableAI "PATH";
                 _drone enableAI "MOVE";
