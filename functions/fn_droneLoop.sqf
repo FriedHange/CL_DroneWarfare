@@ -1,3 +1,176 @@
+// Register EntityCreated handler to prevent FPV drone collisions and realign crew sides immediately upon spawn
+addMissionEventHandler ["EntityCreated", {
+    params ["_entity"];
+    if (isNull _entity) exitWith {};
+    if (!local _entity) exitWith {};
+    
+    private _type = typeOf _entity;
+    if (_entity isKindOf "UAV" || {_entity isKindOf "Air"}) then {
+        // Exclude Shahed and any drone spawned near a swarm launcher crate (which handles its own launch physics)
+        if (((_type find "Crocus" > -1) || (_type find "KVN" > -1) || (_type find "UAFPV" > -1)) && {!("Shahed" in _type)}) then {
+            private _nearLaunchers = nearestObjects [_entity, ["CLDWC_DroneCrate_Swarm"], 15];
+            if (count _nearLaunchers > 0) exitWith {};
+            
+            // 1. Safety positioning and temporary invincibility to prevent collision explosions (AI-only)
+            _entity allowDamage false;
+            
+            _entity spawn {
+                params ["_drone"];
+                sleep 0.05; // Wait 1 frame for physics to initialize
+                if (isNull _drone) exitWith {};
+                
+                // Exclude player-owned and editor/Zeus-placed drones from safety overrides
+                private _isPlayerOwned = false;
+                private _ownerStr = _drone getVariable ["ddtOwner", ""];
+                if (_ownerStr == "") exitWith {
+                    _drone allowDamage true; // Re-enable damage immediately for editor/Zeus drones
+                };
+                
+                private _owner = missionNamespace getVariable [_ownerStr, objNull];
+                if (isNull _owner) then {
+                    { if (str _x == _ownerStr) exitWith { _owner = _x; }; } forEach allUnits;
+                };
+                if (!isNull _owner && {isPlayer _owner}) then { _isPlayerOwned = true; };
+                
+                if (!_isPlayerOwned) then {
+                    { if (getConnectedUAV _x == _drone) exitWith { _isPlayerOwned = true; }; } forEach allPlayers;
+                };
+                if (!_isPlayerOwned) then {
+                    private _crew = crew _drone;
+                    if (count _crew > 0) then {
+                        private _grp = group (_crew select 0);
+                        if ({isPlayer _x} count (units _grp) > 0) then { _isPlayerOwned = true; };
+                    };
+                };
+                if (_isPlayerOwned) exitWith {
+                    _drone allowDamage true; // Re-enable damage immediately for player drone
+                    if (missionNamespace getVariable ["ddtDebug", false]) then {
+                        systemChat "CLDW: Excluded player-owned drone from safety relocation.";
+                    };
+                };
+                
+                private _posASL = getPosASL _drone;
+                private _upPos = _posASL vectorAdd [0, 0, 50];
+                private _intersections = lineIntersectsSurfaces [_posASL, _upPos, _drone, objNull, true, 1, "VIEW", "FIRE"];
+                
+                if (count _intersections > 0) then {
+                    // Spawned inside building/under roof. Teleport to roof.
+                    private _intersection = _intersections select 0;
+                    private _roofPosASL = _intersection select 0;
+                    private _safePosASL = _roofPosASL vectorAdd [0, 0, 3];
+                    _drone setPosASL _safePosASL;
+                    _drone setVectorDirAndUp [vectorDir _drone, [0, 0, 1]];
+                    _drone setVelocity [0, 0, 0.5];
+                    if (missionNamespace getVariable ["ddtDebug", false]) then {
+                        systemChat format ["CLDW: Relocated %1 from inside building to roof.", typeOf _drone];
+                    };
+                } else {
+                    // Ensure drone is clear of ground and other objects
+                    private _posATL = getPosATL _drone;
+                    if (_posATL select 2 < 3.5) then {
+                        _drone setPosATL [_posATL select 0, _posATL select 1, 3.5];
+                        _drone setVectorDirAndUp [vectorDir _drone, [0, 0, 1]];
+                        _drone setVelocity [0, 0, 0.5];
+                    };
+                };
+                
+                // Keep it upright and stable for the first second of flight while engine initializes
+                for "_j" from 1 to 10 do {
+                    if (isNull _drone || {!alive _drone}) exitWith {};
+                    _drone setVectorDirAndUp [vectorDir _drone, [0, 0, 1]];
+                    sleep 0.1;
+                };
+                
+                // Allow physics to settle before re-enabling damage
+                sleep 3.0;
+                if (!isNull _drone && {alive _drone}) then {
+                    _drone allowDamage true;
+                };
+            };
+            
+            // 2. Instantly realign crew side to prevent friendly mortar targeting (AI-only)
+            _entity spawn {
+                params ["_drone"];
+                sleep 0.05; // Wait 1 frame to detect ownership variables
+                if (isNull _drone) exitWith {};
+                
+                // Exclude player-owned and editor/Zeus-placed drones from crew realignment
+                private _isPlayerOwned = false;
+                private _ownerStr = _drone getVariable ["ddtOwner", ""];
+                if (_ownerStr == "") exitWith {}; // Exclude editor/Zeus placed drones
+                
+                private _owner = missionNamespace getVariable [_ownerStr, objNull];
+                if (isNull _owner) then {
+                    { if (str _x == _ownerStr) exitWith { _owner = _x; }; } forEach allUnits;
+                };
+                if (!isNull _owner && {isPlayer _owner}) then { _isPlayerOwned = true; };
+                
+                if (!_isPlayerOwned) then {
+                    { if (getConnectedUAV _x == _drone) exitWith { _isPlayerOwned = true; }; } forEach allPlayers;
+                };
+                if (!_isPlayerOwned) then {
+                    private _crew = crew _drone;
+                    if (count _crew > 0) then {
+                        private _grp = group (_crew select 0);
+                        if ({isPlayer _x} count (units _grp) > 0) then { _isPlayerOwned = true; };
+                    };
+                };
+                if (_isPlayerOwned) exitWith {};
+                
+                private _timeout = time + 3.0;
+                waitUntil {
+                    // Instantly set any spawned crew captive as they spawn to block target locking
+                    {
+                        if !(_x getVariable ["CLDWC_CrewCaptiveSet", false]) then {
+                            _x setCaptive true;
+                            _x setVariable ["CLDWC_CrewCaptiveSet", true];
+                        };
+                    } forEach (crew _drone);
+                    !((crew _drone) isEqualTo []) || time > _timeout
+                };
+                
+                if (isNull _drone) exitWith {};
+                private _crew = crew _drone;
+                if !(_crew isEqualTo []) then {
+                    // Determine correct side based on owner or vehicle prefix
+                    private _ownerStr = _drone getVariable ["ddtOwner", ""];
+                    private _side = sideUnknown;
+                    if (_ownerStr != "") then {
+                        private _owner = missionNamespace getVariable [_ownerStr, objNull];
+                        if (isNull _owner) then {
+                            {
+                                if (str _x == _ownerStr) exitWith { _owner = _x; };
+                            } forEach allUnits;
+                        };
+                        if (!isNull _owner) then {
+                            _side = side group _owner;
+                        };
+                    };
+                    
+                    if (_side == sideUnknown) then {
+                        private _type = typeOf _drone;
+                        if (_type select [0, 2] == "B_") then { _side = west; };
+                        if (_type select [0, 2] == "O_") then { _side = east; };
+                        if (_type select [0, 2] == "I_") then { _side = independent; };
+                    };
+                    
+                    if (_side == sideUnknown) then { _side = civilian; };
+                    
+                    // Move crew to a new group of the correct side
+                    private _newGrp = createGroup _side;
+                    _crew joinSilent _newGrp;
+                    _newGrp deleteGroupWhenEmpty true;
+                    
+                    // Release captive status now that side is aligned
+                    {
+                        _x setCaptive false;
+                    } forEach _crew;
+                };
+            };
+        };
+    };
+}];
+
 [] spawn { 
     // Wait for DDT mod to initialize, then apply overrides
     [] spawn {
@@ -114,6 +287,26 @@
                     continue;
                 };
 
+                // AI turret/tower safety check: Strip drone bags from units in turrets or on watchtowers
+                {
+                    if !(isPlayer _x) then {
+                        private _bp = backpack _x;
+                        if (_bp != "") then {
+                            private _isDroneBag = ("Crocus" in _bp) || ("KVN" in _bp) || ("UAFPV" in _bp) || ("UAS_06" in _bp);
+                            if (_isDroneBag) then {
+                                private _inTurret = (vehicle _x != _x);
+                                private _onTower = ((getPosATL _x) select 2) > 1.8;
+                                if (_inTurret || _onTower) then {
+                                    removeBackpack _x;
+                                    if (missionNamespace getVariable ["ddtDebug", false]) then {
+                                        systemChat format ["CLDW: Stripped drone bag from %1 on turret/tower.", name _x];
+                                    };
+                                };
+                            };
+                        };
+                    };
+                } forEach units _group;
+
                 private _currentOperators = _group getVariable ["_chosen_drone_operators_list", []]; 
                 _currentOperators = _currentOperators select { alive _x && {!isNull _x} };
                 _group setVariable ["_chosen_drone_operators_list", _currentOperators];
@@ -140,7 +333,8 @@
             
                         { 
                             if !(isPlayer _x) then { 
-                                if (vehicle _x == _x && {!(_x in _currentOperators)}) then { 
+                                private _onTower = ((getPosATL _x) select 2) > 1.8;
+                                if (vehicle _x == _x && {!_onTower} && {!(_x in _currentOperators)}) then { 
                                     if (backpack _x isEqualTo "" || {missionNamespace getVariable ["CLDW_Setting_ReplaceBackpacks", false]}) then { _eligibleUnits pushBack _x; }; 
                                 }; 
                             }; 
@@ -180,6 +374,11 @@
                                                             // Avoid adding virtual crew to player-led or player-containing groups to prevent UI clutter and softlocks
                                                             if (!({isPlayer _x} count (units _grp) > 0)) then {
                                                                 _crew joinSilent _grp;
+                                                            } else {
+                                                                // If the group contains players, join the crew to a new separate group of the same side to prevent UI clutter
+                                                                private _separateGrp = createGroup (side _grp);
+                                                                _crew joinSilent _separateGrp;
+                                                                _separateGrp deleteGroupWhenEmpty true;
                                                             };
                                                         };
                                                     };
