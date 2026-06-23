@@ -55,6 +55,8 @@ if (!isNull _uav) then {
 private _rawTargets = _man targets [true, _range];
 private _validTargets = [];
 
+private _atTargetsInfantry = missionNamespace getVariable ["CLDW_Setting_ATTargetsInfantry", false];
+
 {
     private _t = vehicle _x;
     if ((_man distance _t) <= _range && { (side _t) getFriend _man_side < 0.6 }) then {
@@ -76,8 +78,10 @@ private _validTargets = [];
         
         if (!_blocked) then {
             if (_isAPDrone) then {
+                // AP drones: always target infantry only
                 if (_t isKindOf "MAN") then { _validTargets pushBackUnique _t; };
             } else {
+                // AT drones: primary targets are armoured/wheeled vehicles
                 if (_t isKindOf "Tank" || _t isKindOf "Car" || _t isKindOf "Wheeled_APC_F") then {
                     if (isTouchingGround _t) then { _validTargets pushBackUnique _t; };
                 };
@@ -85,6 +89,30 @@ private _validTargets = [];
         };
     };
 } forEach _rawTargets;
+
+// AT drone infantry fallback: if the setting is on AND no vehicle targets were found, also consider infantry
+if (!_isAPDrone && _atTargetsInfantry && _validTargets isEqualTo []) then {
+    {
+        private _t = vehicle _x;
+        if ((_man distance _t) <= _range && { (side _t) getFriend _man_side < 0.6 } && { _t isKindOf "MAN" }) then {
+            private _eyeStart = eyePos _man;
+            if (_eyeStart isEqualTo [0,0,0]) then { _eyeStart = (getPosASL _man) vectorAdd [0,0,1.5]; };
+            if (!isNull _uav) then { 
+                _eyeStart = eyePos _uav; 
+                if (_eyeStart isEqualTo [0,0,0]) then { _eyeStart = (getPosASL _uav) vectorAdd [0,0,0.5]; }; 
+            };
+            private _eyeEnd = eyePos _t;
+            if (_eyeEnd isEqualTo [0,0,0]) then { _eyeEnd = (getPosASL _t) vectorAdd [0,0,1]; };
+
+            private _blocked = terrainIntersectASL [_eyeStart, _eyeEnd] || {
+                private _intersections = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _uav, _t, true, 1, "VIEW", "FIRE"];
+                count _intersections > 0
+            };
+
+            if (!_blocked) then { _validTargets pushBackUnique _t; };
+        };
+    } forEach _rawTargets;
+};
 
 // EMERGENCY FALLBACK
 if (_validTargets isEqualTo []) then {

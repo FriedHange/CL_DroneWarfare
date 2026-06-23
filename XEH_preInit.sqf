@@ -60,6 +60,36 @@
     1
 ] call CBA_fnc_addSetting;
 
+// 3a. AP Drone Bags Per Squad
+[
+    "CLDW_Setting_APDroneCount",
+    "SLIDER",
+    ["AP Drone Bags Per Squad", "How many AP (Anti-Personnel) drone backpacks can be distributed per group. AP drones target infantry. Set to 0 to disable AP drones entirely."],
+    "CL Drone Warfare",
+    [0, 8, 2, 0],
+    1
+] call CBA_fnc_addSetting;
+
+// 3b. AT Drone Bags Per Squad
+[
+    "CLDW_Setting_ATDroneCount",
+    "SLIDER",
+    ["AT Drone Bags Per Squad", "How many AT (Anti-Tank) drone backpacks can be distributed per group. AT drones target vehicles. Set to 0 to disable AT drones entirely."],
+    "CL Drone Warfare",
+    [0, 8, 1, 0],
+    1
+] call CBA_fnc_addSetting;
+
+// 3c. AT Drones Can Target Infantry
+[
+    "CLDW_Setting_ATTargetsInfantry",
+    "CHECKBOX",
+    ["AT Drones Can Target Infantry", "If checked, AT drones will also engage infantry when no armoured vehicles are within range. If unchecked, AT drones only engage tanks, APCs and wheeled vehicles."],
+    "CL Drone Warfare",
+    false,
+    1
+] call CBA_fnc_addSetting;
+
 // 4. Background Loop Interval Slider
 [
     "CLDW_Setting_LoopSpeed",

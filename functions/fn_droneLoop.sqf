@@ -313,24 +313,60 @@ addMissionEventHandler ["EntityCreated", {
  
                 if (_currentOperators isEqualTo []) then { _group setVariable ["_drone_initialized", false]; };
                 
-                // CBA CHECK: Scale drone distribution count dynamically based on menu slider
-                private _currentDroneCount = count _currentOperators;
-                private _maxAllowedDrones = round (missionNamespace getVariable ["CLDW_Setting_MaxDrones", 3]);
+                // CBA CHECK: Read per-type quotas and derive total cap
+                private _maxAP = round (missionNamespace getVariable ["CLDW_Setting_APDroneCount", 2]);
+                private _maxAT = round (missionNamespace getVariable ["CLDW_Setting_ATDroneCount", 1]);
+                private _maxAllowedDrones = (_maxAP + _maxAT) max (round (missionNamespace getVariable ["CLDW_Setting_MaxDrones", 3]));
                 private _minSquadSize = round (missionNamespace getVariable ["CLDW_Setting_MinSquadSize", 4]);
- 
+
                 if (_currentDroneCount < _maxAllowedDrones) then { 
                     if ((count units _group) >= _minSquadSize) then { 
                         
-                        private _sideDrones = switch (_groupSide) do { 
-                            case west: { ["B_Crocus_AP_Bag", "B_Crocus_AT_Bag", "B_KVN_AP_Bag", "B_KVN_AT_Bag", "B_UAFPV_IED_AP_Bag", "B_UAFPV_OG7V_AP_Bag", "B_UAFPV_RKG_AP_Bag", "B_UAFPV_PG7VL_AT_Bag"] }; 
-                            case east:  { ["O_Crocus_AP_Bag", "O_Crocus_AT_Bag", "O_KVN_AP_Bag", "O_KVN_AT_Bag", "O_UAFPV_IED_AP_Bag", "O_UAFPV_OG7V_AP_Bag", "O_UAFPV_RKG_AP_Bag", "O_UAFPV_PG7VL_AT_Bag"] }; 
-                            default      { ["I_Crocus_AP_Bag", "I_Crocus_AT_Bag", "I_KVN_AP_Bag", "I_KVN_AT_Bag", "I_UAFPV_IED_AP_Bag", "I_UAFPV_OG7V_AP_Bag", "I_UAFPV_RKG_AP_Bag", "I_UAFPV_PG7VL_AT_Bag"] }; 
-                        }; 
-            
-                        private _eligibleUnits = []; 
+                        // Build side-specific AP and AT bag class arrays
+                        private _apBags = switch (_groupSide) do { 
+                            case west: { ["B_Crocus_AP_Bag", "B_KVN_AP_Bag", "B_UAFPV_IED_AP_Bag", "B_UAFPV_OG7V_AP_Bag", "B_UAFPV_RKG_AP_Bag"] }; 
+                            case east:  { ["O_Crocus_AP_Bag", "O_KVN_AP_Bag", "O_UAFPV_IED_AP_Bag", "O_UAFPV_OG7V_AP_Bag", "O_UAFPV_RKG_AP_Bag"] }; 
+                            default      { ["I_Crocus_AP_Bag", "I_KVN_AP_Bag", "I_UAFPV_IED_AP_Bag", "I_UAFPV_OG7V_AP_Bag", "I_UAFPV_RKG_AP_Bag"] }; 
+                        };
+                        private _atBags = switch (_groupSide) do { 
+                            case west: { ["B_Crocus_AT_Bag", "B_KVN_AT_Bag", "B_UAFPV_PG7VL_AT_Bag"] }; 
+                            case east:  { ["O_Crocus_AT_Bag", "O_KVN_AT_Bag", "O_UAFPV_PG7VL_AT_Bag"] }; 
+                            default      { ["I_Crocus_AT_Bag", "I_KVN_AT_Bag", "I_UAFPV_PG7VL_AT_Bag"] }; 
+                        };
+
+                        // Count how many AP and AT operators this group currently has
+                        private _currentAP = 0;
+                        private _currentAT = 0;
+                        {
+                            private _bp = backpack _x;
+                            if (_bp in _apBags) then { _currentAP = _currentAP + 1; };
+                            if (_bp in _atBags) then { _currentAT = _currentAT + 1; };
+                        } forEach _currentOperators;
+
+                        // Build weighted pool: add classes proportional to remaining quota slots
+                        // e.g. if AP quota is 2 and AT quota is 1, AP bags appear twice as often.
+                        private _weightedPool = [];
+                        private _apRemaining = (_maxAP - _currentAP) max 0;
+                        private _atRemaining = (_maxAT - _currentAT) max 0;
+
+                        // Add AP bags once per remaining AP slot
+                        for "_i" from 1 to _apRemaining do { _weightedPool append _apBags; };
+                        // Add AT bags once per remaining AT slot
+                        for "_i" from 1 to _atRemaining do { _weightedPool append _atBags; };
+
+                        // If both quotas are full (or both are 0), fall back to full list
+                        if (_weightedPool isEqualTo []) then {
+                            _weightedPool = _apBags + _atBags;
+                        };
+
                         private _groupBackpacks = [];
                         { _groupBackpacks pushBackUnique (backpack _x); } forEach units _group;
-            
+
+                        // Prefer bag types not already in the group (variety check)
+                        private _uniquePool = _weightedPool select { !(_x in _groupBackpacks) };
+                        if (_uniquePool isEqualTo []) then { _uniquePool = _weightedPool; };
+
+                        private _eligibleUnits = []; 
                         { 
                             if !(isPlayer _x) then { 
                                 private _onTower = ((getPosATL _x) select 2) > 1.8;
@@ -342,9 +378,7 @@ addMissionEventHandler ["EntityCreated", {
             
                         if !(_eligibleUnits isEqualTo []) then { 
                             private _operator = selectRandom _eligibleUnits; 
-                            private _availableTypes = _sideDrones select { !(_x in _groupBackpacks) };
-                            if (_availableTypes isEqualTo []) then { _availableTypes = _sideDrones; };
-                            private _droneBackpack = selectRandom _availableTypes; 
+                            private _droneBackpack = selectRandom _uniquePool; 
                 
                             if (backpack _operator != "") then {
                                 removeBackpack _operator;
@@ -371,11 +405,10 @@ addMissionEventHandler ["EntityCreated", {
                                                                 _x setVariable ["USED", true, true];
                                                                 if (_x in switchableUnits) then { removeSwitchableUnit _x; };
                                                             } forEach _crew;
-                                                            // Avoid adding virtual crew to player-led or player-containing groups to prevent UI clutter and softlocks
+                                                            // Avoid adding virtual crew to player-led or player-containing groups
                                                             if (!({isPlayer _x} count (units _grp) > 0)) then {
                                                                 _crew joinSilent _grp;
                                                             } else {
-                                                                // If the group contains players, join the crew to a new separate group of the same side to prevent UI clutter
                                                                 private _separateGrp = createGroup (side _grp);
                                                                 _crew joinSilent _separateGrp;
                                                                 _separateGrp deleteGroupWhenEmpty true;
