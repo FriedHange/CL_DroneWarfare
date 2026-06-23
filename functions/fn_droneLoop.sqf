@@ -314,6 +314,7 @@ addMissionEventHandler ["EntityCreated", {
                 if (_currentOperators isEqualTo []) then { _group setVariable ["_drone_initialized", false]; };
                 
                 // CBA CHECK: Read per-type quotas and derive total cap
+                private _currentDroneCount = count _currentOperators;
                 private _maxAP = round (missionNamespace getVariable ["CLDW_Setting_APDroneCount", 2]);
                 private _maxAT = round (missionNamespace getVariable ["CLDW_Setting_ATDroneCount", 1]);
                 private _maxAllowedDrones = (_maxAP + _maxAT) max (round (missionNamespace getVariable ["CLDW_Setting_MaxDrones", 3]));
