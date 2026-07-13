@@ -24,6 +24,23 @@ if ((toUpper (typeOf _drone)) in _crocusAP) then {
     _speed = _droneSpeedSetting;
     _minDistanceToTarget = 1;
 };
+
+// UAFPV drones (Tom's Ukraine FPV and BIG GUY edits) — detect AP vs AT for turn rate/inertia tuning
+// All UAFPV drones are AP-type UNLESS their vehicle classname contains "_AT" (anti-tank variants)
+private _droneType = typeOf _drone;
+if (!_AP && { _droneType find "UAFPV" > -1 }) then {
+    if !(_droneType find "_AT" > -1) then {
+        _AP = true;
+        _minDistanceToTarget = 1;
+    };
+};
+
+// RC-40 HE = AP loitering munition
+if (!_AP && { ["rc40_he", toLower _droneType] call BIS_fnc_inString }) then {
+    _AP = true;
+    _minDistanceToTarget = 1;
+};
+
 if (_speed < _droneSpeedSetting) then {
     _speed = _droneSpeedSetting;
 };
@@ -227,6 +244,22 @@ private _lowAlt        = ((getPosASL _drone select 2) - (getTerrainHeightASL (ge
 if (_closeEnough) then {
     // Normal impact detonation
     _drone setFuel 0;
+
+    // Tag target and nearby units before detonation for RIS scoring
+    private _operator = _drone getVariable ["CLDW_CurrentOperator", objNull];
+    if (!isNull _operator) then {
+        _target setVariable ["CLDW_LastDroneAttacker", _operator, true];
+        _target setVariable ["CLDW_LastDroneAttackerTime", time, true];
+        _target setVariable ["CLDW_LastDroneAttackerSide", side group _operator, true];
+        
+        private _nearUnits = nearestObjects [_target, ["CAManBase"], 15];
+        {
+            _x setVariable ["CLDW_LastDroneAttacker", _operator, true];
+            _x setVariable ["CLDW_LastDroneAttackerTime", time, true];
+            _x setVariable ["CLDW_LastDroneAttackerSide", side group _operator, true];
+        } forEach _nearUnits;
+    };
+
     if (_crocus) then { _drone call DB_fnc_fpv_onDestroy; };
 } else {
     if (_targetDied && {_lowAlt}) then {
@@ -235,6 +268,18 @@ if (_closeEnough) then {
             systemChat "Drone: Target died, too low to recover, crashing.";
         };
         _drone setFuel 0;
+
+        // Tag nearby units before detonation for RIS scoring
+        private _operator = _drone getVariable ["CLDW_CurrentOperator", objNull];
+        if (!isNull _operator) then {
+            private _nearUnits = nearestObjects [_drone, ["CAManBase"], 15];
+            {
+                _x setVariable ["CLDW_LastDroneAttacker", _operator, true];
+                _x setVariable ["CLDW_LastDroneAttackerTime", time, true];
+                _x setVariable ["CLDW_LastDroneAttackerSide", side group _operator, true];
+            } forEach _nearUnits;
+        };
+
         if (_crocus) then { _drone call DB_fnc_fpv_onDestroy; };
     } else {
         if (_outOfRange || _targetDied) then {

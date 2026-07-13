@@ -47,7 +47,7 @@ private _isAPDrone = false;
 
 if (!isNull _uav) then {
     private _uavClass = typeOf _uav;
-    if (_uavClass == "B_Crocus_AP_F" || _uavClass == "O_Crocus_AP_F" || _uavClass == "I_Crocus_AP_F" || ["_AP_", _uavClass] call BIS_fnc_inString || ["UAFPV_IED_AP", _uavClass] call BIS_fnc_inString || ["UAFPV_OG7V_AP", _uavClass] call BIS_fnc_inString || ["UAFPV_RKG_AP", _uavClass] call BIS_fnc_inString) then {
+    if (_uavClass == "B_Crocus_AP_F" || _uavClass == "O_Crocus_AP_F" || _uavClass == "I_Crocus_AP_F" || ["_AP_", _uavClass] call BIS_fnc_inString || ["UAFPV_IED_AP", _uavClass] call BIS_fnc_inString || ["UAFPV_OG7V_AP", _uavClass] call BIS_fnc_inString || ["UAFPV_RKG_AP", _uavClass] call BIS_fnc_inString || ["rc40_he", toLower _uavClass] call BIS_fnc_inString) then {
         _isAPDrone = true;
     };
 };
@@ -176,7 +176,7 @@ if (!isNull _uav) then {
     _uav setVariable ["CLDW_CurrentTarget", _closestTarget, true];
     _uav setVariable ["CLDW_CurrentOperator", _man, true];
     
-    if (CLDW_Setting_ForceDirectMove) then {
+    if (missionNamespace getVariable ["CLDW_Setting_ForceDirectMove", true]) then {
         private _targetPos = getPosATL _closestTarget;
         if !(_targetPos isEqualTo [0,0,0]) then {
             (group _uav) setBehaviour "COMBAT";
