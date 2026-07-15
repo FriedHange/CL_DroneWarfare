@@ -54,6 +54,14 @@ if (!isNull _man && {alive _man}) then {
     waitUntil {
         sleep 1;
 
+        // Check if player took control
+        private _controller = uavControl _drone select 0;
+        if (!isNull _controller && {isPlayer _controller}) exitWith {
+            _drone setVariable ["CLDW_Disengaged", false, true];
+            _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+            true
+        };
+
         // Resolve operator dynamically if they die or teleport during flight
         if (isNull _man || {!alive _man}) then {
             private _opGrp = _drone getVariable ["CLDW_OperatorGroup", grpNull];
@@ -84,6 +92,14 @@ if (!isNull _man && {alive _man}) then {
     };
 
     if (!alive _drone || isNull _drone) exitWith {};
+
+    // If player took control, exit the function immediately
+    private _controller2 = uavControl _drone select 0;
+    if (!isNull _controller2 && {isPlayer _controller2}) exitWith {
+        if (missionNamespace getVariable ["ddtDebug", false]) then {
+            systemChat "Player took control of drone; disengage aborted.";
+        };
+    };
 
     if (isNull _man || {!alive _man}) exitWith {
         if (missionNamespace getVariable ["ddtDebug", false]) then {
@@ -118,13 +134,31 @@ if (!isNull _man && {alive _man}) then {
         sleep 1;
         deleteGroup _grp;
 
-        [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+        private _uavType = toLower (typeOf _drone);
+        private _isSuicide = (_uavType find "crocus" > -1) || 
+                             {_uavType find "kvn" > -1} || 
+                             {_uavType find "uafpv" > -1} || 
+                             {_uavType find "rc40_he" > -1};
+        if (_isSuicide) then {
+            [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+        } else {
+            [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf";
+        };
     } else {
         // If the squad contains a player, keep the crew in the temporary group '_grp' to prevent UI clutter and softlocks
         _drone setVariable ["CLDW_Disengaged", false, true];
         _drone setVariable ["CLDW_CurrentTarget", objNull, true];
 
-        [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+        private _uavType = toLower (typeOf _drone);
+        private _isSuicide = (_uavType find "crocus" > -1) || 
+                             {_uavType find "kvn" > -1} || 
+                             {_uavType find "uafpv" > -1} || 
+                             {_uavType find "rc40_he" > -1};
+        if (_isSuicide) then {
+            [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+        } else {
+            [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf";
+        };
     };
 } else {
     // Operator is dead — delete crew so drone crashes

@@ -206,7 +206,7 @@ if (isClass (configFile >> "CfgVehicles" >> "B_UAFPV_AP_Bag")) then {
 
 
 // Western Sahara IED UAV (bomber — targets vehicles, placed in AT quota)
-if (isClass (configFile >> "CfgVehicles" >> "B_Tura_UAV_02_IED_backpack_F") || {isClass (configFile >> "CfgVehicles" >> "B_ION_UAV_02_IED_backpack_F")}) then {
+if (isClass (configFile >> "CfgVehicles" >> "B_Tura_UAV_02_IED_backpack_lxWS") || {isClass (configFile >> "CfgVehicles" >> "B_ION_UAV_02_IED_backpack_lxWS")}) then {
     [
         "CLDW_Mod_WS_IED",
         "CHECKBOX",

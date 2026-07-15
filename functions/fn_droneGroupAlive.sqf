@@ -25,7 +25,7 @@ if (_drone getVariable ["CLDW_Disengaged", false]) exitWith { false };
 
 if (!alive _drone) exitWith { false };
 if ((count (crew _drone)) < 1) exitWith { false };
-if (isPlayer (getConnectedUAV _drone)) exitWith { true };
+if ({getConnectedUAV _x == _drone} count allPlayers > 0 || {isPlayer (uavControl _drone select 0)}) exitWith { true };
 if (isNull _man || {!alive _man}) exitWith {
     _drone setVariable ["ddtExclude", true, true];
     {deleteVehicle _x} forEach (crew _drone);

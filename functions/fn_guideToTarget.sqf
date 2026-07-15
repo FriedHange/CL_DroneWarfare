@@ -2,6 +2,24 @@ params [["_drone", objNull], ["_target", objNull], ["_speed", 20], ["_minDistanc
 
 if (isNull _drone || {isNull _target}) exitWith {};
 
+// If the drone is not a suicide FPV drone (e.g. it's a bomber/utility drone like Western Sahara IED or AL-6),
+// delegate to the original DDT guide function so that it can perform its native bombing run.
+private _droneType = typeOf _drone;
+private _lowerType = toLower _droneType;
+private _isWS = (_lowerType find "uav_02_ied" > -1) || {_lowerType find "tura_uav" > -1};
+private _isVanilla = (_lowerType find "uas_06" > -1) || {_lowerType find "uav_01" > -1};
+private _isFPV = ((_lowerType find "crocus" > -1) || 
+                 {_lowerType find "kvn" > -1} || 
+                 {_lowerType find "uafpv" > -1} || 
+                 {_lowerType find "rc40" > -1} || 
+                 {_lowerType find "rc-40" > -1}) && {!_isWS} && {!_isVanilla};
+
+if (!_isFPV) exitWith {
+    if (!isNil "CLDW_original_GuideToTarget") then {
+        _this call CLDW_original_GuideToTarget;
+    };
+};
+
 private _AP = false;
 private _crocus = false;
 private _crocusAP = [
@@ -100,8 +118,15 @@ private _dist = 9999;
 // Minimum AGL altitude below which we won't attempt to pull out (not enough room to recover)
 private _minRecoveryAlt = 15;
 
+private _playerTookControl = false;
 while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}} do {
     if ((count (crew _drone)) < 1) exitWith {};
+
+    // If player takes control of the drone, exit/abort the loop to allow full manual control
+    private _controller = uavControl _drone select 0;
+    if (!isNull _controller && {isPlayer _controller}) exitWith {
+        _playerTookControl = true;
+    };
     
     private _currentPos = getPosASLVisual _drone;
     _targetPos = getPosASLVisual _target;
@@ -220,6 +245,14 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
 };
 
 if (isNull _drone) exitWith {};
+
+if (_playerTookControl) exitWith {
+    if (missionNamespace getVariable ["ddtDebug", false]) then {
+        systemChat "Player took control of drone; guiding aborted.";
+    };
+    _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+    _drone setVariable ["CLDW_Disengaged", false, true];
+};
 
 // Check if we lost lock but the drone is still alive and has an operator
 _man = _drone getVariable ["CLDW_CurrentOperator", objNull];
