@@ -538,8 +538,10 @@ if (isServer) then {
                             default     { "I_UavTerminal" };
                         };
                         if (_terminalClass in (assignedItems _x)) then {
-                            private _hasDrone = false;
-                            private _currentBp = backpack _x;
+                            private _unit = _x;
+                            private _hasActiveDrone = ({(_x getVariable ["CLDW_CurrentOperator", objNull]) == _unit && {alive _x}} count _allActiveDrones) > 0;
+                            private _hasDrone = _hasActiveDrone;
+                            private _currentBp = backpack _unit;
                             if (_currentBp != "") then {
                                 if ([_currentBp] call _fnc_isDroneBag) then {
                                     _hasDrone = true;
@@ -550,11 +552,10 @@ if (isServer) then {
                                     if (toLower _x find "rc40" > -1 || toLower _x find "rc-40" > -1) exitWith {
                                         _hasDrone = true;
                                     };
-                                } forEach (magazines _x);
+                                } forEach (magazines _unit);
                             };
 
-                            if (!_hasDrone) then {
-                                private _unit = _x;
+                            if (!_hasDrone && {(count (_group getVariable ["_chosen_drone_operators_list", []])) < (round (missionNamespace getVariable ["CLDW_Setting_MaxDrones", 2]))}) then {
                                 private _weapon = primaryWeapon _unit;
                                 private _hasGL = false;
                                 if (_weapon != "") then {
@@ -612,6 +613,12 @@ if (isServer) then {
                                     for "_i" from 1 to _ammoCount do {
                                         _unit addMagazine _chosenMag;
                                     };
+                                    
+                                    // Update the chosen operators list immediately to prevent multiple allocations in one pass
+                                    private _list = _group getVariable ["_chosen_drone_operators_list", []];
+                                    _list pushBackUnique _unit;
+                                    _group setVariable ["_chosen_drone_operators_list", _list];
+                                    
                                     if (missionNamespace getVariable ["ddtDebug", false]) then {
                                         systemChat format ["CLDW: Unit %1 had UAV Terminal but no drone. Added RC-40.", name _unit];
                                     };
@@ -646,6 +653,12 @@ if (isServer) then {
                                             removeBackpack _unit;
                                         };
                                         _unit addBackpack _droneBackpack;
+                                        
+                                        // Update the chosen operators list immediately to prevent multiple allocations in one pass
+                                        private _list = _group getVariable ["_chosen_drone_operators_list", []];
+                                        _list pushBackUnique _unit;
+                                        _group setVariable ["_chosen_drone_operators_list", _list];
+                                        
                                         if (missionNamespace getVariable ["ddtDebug", false]) then {
                                             systemChat format ["CLDW: Unit %1 had UAV Terminal but no drone. Added backpack %2.", name _unit, _droneBackpack];
                                         };
