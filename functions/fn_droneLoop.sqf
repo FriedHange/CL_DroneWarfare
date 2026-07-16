@@ -555,7 +555,12 @@ if (isServer) then {
                                 } forEach (magazines _unit);
                             };
 
-                            if (!_hasDrone && {(count (_group getVariable ["_chosen_drone_operators_list", []])) < (round (missionNamespace getVariable ["CLDW_Setting_MaxDrones", 2]))}) then {
+                            // NEW: enforce squad size + quota before handing out a replacement drone
+                            private _minSquadSize = round (missionNamespace getVariable ["CLDW_Setting_MinSquadSize", 4]);
+                            private _canReplace = (count units _group) >= _minSquadSize
+                                && { (count (_group getVariable ["_chosen_drone_operators_list", []])) < (round (missionNamespace getVariable ["CLDW_Setting_MaxDrones", 2])) };
+
+                            if (!_hasDrone && _canReplace) then {
                                 private _weapon = primaryWeapon _unit;
                                 private _hasGL = false;
                                 if (_weapon != "") then {
@@ -663,6 +668,13 @@ if (isServer) then {
                                             systemChat format ["CLDW: Unit %1 had UAV Terminal but no drone. Added backpack %2.", name _unit, _droneBackpack];
                                         };
                                     };
+                                };
+                            };
+
+                            if (!_hasDrone && !_canReplace) then {
+                                _unit unlinkItem _terminalClass;
+                                if (missionNamespace getVariable ["ddtDebug", false]) then {
+                                    systemChat format ["CLDW: Stripped orphaned UAV terminal from %1 (failed quota/squad size check).", name _unit];
                                 };
                             };
                         };
