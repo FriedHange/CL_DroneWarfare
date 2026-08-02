@@ -66,7 +66,10 @@ private _manSide = side _man;
             if (_v isKindOf "MAN") then {
                 _out pushBackUnique _v;
             } else {
-                if (isTouchingGround _v && { (getNumber(configFile >> "CfgVehicles" >> (typeOf _v) >> "armor")) <= _threshold }) then {
+                private _isUnmanned = (_v isKindOf "UAV") || {_v isKindOf "UGV_01_base_F"} || {unitIsUAV _v} || {({ alive _x && !(_x getVariable ["CLDW_IsDroneCrew", false]) } count (crew _v)) == 0};
+                private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} || {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} || { (getNumber(configFile >> "CfgVehicles" >> (typeOf _v) >> "armor")) <= (_threshold max 150) };
+                private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} || {_v isKindOf "Wheeled_APC_F"};
+                if (!_isUnmanned && {isTouchingGround _v} && {_isSoftVehicle} && {!_isHeavyArmor}) then {
                     _out pushBackUnique _v;
                 };
             };

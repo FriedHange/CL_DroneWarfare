@@ -109,20 +109,21 @@
 ] call CBA_fnc_addSetting;
 
 [
-	"CLDW_Setting_GlobalDroneLimit",
+	"CLDW_Setting_APRatio",
 	"SLIDER",
-	["Global Drone Limit", "The maximum number of active drones allowed on the battlefield simultaneously across all AI groups."],
+	["Drone Ratio", "Percentage of anti-personnel (AP) drones distributed to AI squads. The remaining percentage will be anti-tank (AT) drones."],
 	["CL Drone Warfare", "Drone Quotas"],
-	[1, 100, 15, 0],
+	[0, 100, 80, 0],
 	1
 ] call CBA_fnc_addSetting;
+
 
 [
 	"CLDW_Setting_DroneSpawnChance",
 	"SLIDER",
 	["Drone Spawn Chance (%)", "The probability of an eligible squad receiving and deploying a drone (0% = disabled, 100% = guaranteed)."],
 	["CL Drone Warfare", "Drone Quotas"],
-	[0, 100, 50, 0],
+	[0, 100, 30, 0],
 	1
 ] call CBA_fnc_addSetting;
 
@@ -143,7 +144,7 @@
 	"SLIDER",
 	["Max Drone Targeting Range", "The maximum distance (in meters) the drone loop will scan for targets."],
 	["CL Drone Warfare", "Flight Profile"],
-	[200, 3000, 500, 0],
+	[200, 3000, 1200, 0],
 	1
 ] call CBA_fnc_addSetting;
 
@@ -152,7 +153,7 @@
 	"SLIDER",
 	["Drone Dive Attack Speed (km/h)", "The speed of the drone during the FPV terminal dive/attack phase in km/h."],
 	["CL Drone Warfare", "Flight Profile"],
-	[50, 270, 125, 0],
+	[50, 350, 100, 0],
 	1
 ] call CBA_fnc_addSetting;
 
@@ -161,7 +162,7 @@
 	"SLIDER",
 	["Drone Cruising Speed (km/h)", "The speed of the drone when patrolling, moving, or returning to the squad in km/h."],
 	["CL Drone Warfare", "Flight Profile"],
-	[30, 180, 85, 0],
+	[30, 250, 85, 0],
 	1
 ] call CBA_fnc_addSetting;
 
@@ -336,84 +337,3 @@ if (isClass (configFile >> "CfgMagazines" >> "1Rnd_RC40_HE_shell_RF")) then {
 		1
 	] call CBA_fnc_addSetting;
 };
-
-// -----------------------------------------------------------------------
-// The following mods are not yet backpack-distributable by CLDW.
-// Their drones are item/magazine/vehicle-based and are deployed natively
-// by DDT's own loops. These settings are commented out until CLDW gains
-// native distribution support for them.
-// -----------------------------------------------------------------------
-
-/*
-// Reaction Forces RC-40 & RC-40HE — recognised only (not backpack-distributed)
-// RC-40 rounds are magazine-based; AI fires from a weapon, not a backpack.
-	[
-		    "CLDW_Mod_RC40", 
-		    "CHECKBOX", 
-		    ["Mod: Reaction Forces RC-40 & RC-40HE", "RC-40 rounds are magazine-based, not backpacks. DDT handles deployment."], 
-		    "CL Drone Warfare - Supported Mods", 
-		    true, 
-		    1
-	] call CBA_fnc_addSetting;
-	
-// Mavic 3 & Mavic 3T (DarkBall) — recognised only (item/magazine-based)
-	[
-		    "CLDW_Mod_Mavic", 
-		    "CHECKBOX", 
-		    ["Mod: Mavic 3 & Mavic 3T (DarkBall)", "Mavic drones use item/magazine slots, not backpacks. DDT handles deployment."], 
-		    "CL Drone Warfare - Supported Mods", 
-		    true, 
-		    1
-	] call CBA_fnc_addSetting;
-	
-// Improved Mavic (Apricot_ale) — recognised only (item/magazine-based)
-	[
-		    "CLDW_Mod_ImprovedMavic", 
-		    "CHECKBOX", 
-		    ["Mod: Improved Mavic (Apricot_ale)", "Improved Mavic uses item/magazine slots, not backpacks. DDT handles deployment."], 
-		    "CL Drone Warfare - Supported Mods", 
-		    true, 
-		    1
-	] call CBA_fnc_addSetting;
-	
-// SPS BlackHornet PRS (Steve) — recognised only (item-based)
-	[
-		    "CLDW_Mod_BlackHornet", 
-		    "CHECKBOX", 
-		    ["Mod: SPS BlackHornet PRS (Steve)", "BlackHornet uses an item slot, not a backpack. DDT handles deployment."], 
-		    "CL Drone Warfare - Supported Mods", 
-		    true, 
-		    1
-	] call CBA_fnc_addSetting;
-	
-// Drongo's Artillery AR-2X (suicide) & AR-2G (grenade drop) — recognised only
-// AR-2X/AR-2G classnames are vehicle-based; no backpack to distribute.
-	[
-		    "CLDW_Mod_DRA", 
-		    "CHECKBOX", 
-		    ["Mod: Drongo's Artillery AR-2X & AR-2G", "AR-2X/AR-2G are vehicle-based, not backpack-deployed by CLDW. DDT handles deployment."], 
-		    "CL Drone Warfare - Supported Mods", 
-		    true, 
-		    1
-	] call CBA_fnc_addSetting;
-	
-// ED-1 Drones (Contact DLC) — recognised only
-	[
-		    "CLDW_Mod_ED1", 
-		    "CHECKBOX", 
-		    ["Mod: ED-1 Drones (Contact DLC)", "ED-1 drones are managed by DDT. CLDW recognises them when active."], 
-		    "CL Drone Warfare - Supported Mods", 
-		    true, 
-		    1
-	] call CBA_fnc_addSetting;
-	
-// Vanilla Recon Drones & Demining Drone — recognised only
-	[
-		    "CLDW_Mod_VanillaRecon", 
-		    "CHECKBOX", 
-		    ["Mod: Vanilla Recon & Demining Drones", "Vanilla recon and demining drones are managed by DDT. CLDW recognises them when active."], 
-		    "CL Drone Warfare - Supported Mods", 
-		    true, 
-		    1
-	] call CBA_fnc_addSetting;
-*/

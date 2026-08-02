@@ -88,6 +88,25 @@ if (!isNull _man && {alive _man}) then {
         };
         _drone doMove _manPos2D;
 
+        private _dronePos = getPosASLVisual _drone;
+        private _manPosASL = getPosASLVisual _man;
+        private _distToMan = _dronePos distance _manPosASL;
+        if (_distToMan > 15) then {
+            private _dirVector = vectorNormalized (_manPosASL vectorDiff _dronePos);
+            private _targetVel = _dirVector vectorMultiply _cruiseSpeed;
+            private _curVel = velocity _drone;
+            private _curHorizVel = [(_curVel select 0), (_curVel select 1), 0];
+            private _desiredHorizVel = [(_targetVel select 0), (_targetVel select 1), 0];
+            
+            private _accelRate = 18; // m/s² cruise acceleration rate
+            private _maxVelChange = _accelRate * 1.0; // 1s sleep step
+            private _velDiff = _desiredHorizVel vectorDiff _curHorizVel;
+            private _diffMag = vectorMagnitude _velDiff;
+            private _newHorizVel = if (_diffMag <= _maxVelChange) then { _desiredHorizVel } else { _curHorizVel vectorAdd ((vectorNormalized _velDiff) vectorMultiply _maxVelChange) };
+            
+            _drone setVelocity [(_newHorizVel select 0), (_newHorizVel select 1), (_curVel select 2) max -2];
+        };
+
         ((getPosVisual _drone) distance2D _manPos2D < 35) || {time > _timeout}
     };
 

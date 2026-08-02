@@ -24,39 +24,66 @@ private _AP = false;
 private _crocus = false;
 private _crocusAP = [
     "B_KVN_AP", "O_KVN_AP", "I_KVN_AP", "B_KVN_AP_TI", "O_KVN_AP_TI", "I_KVN_AP_TI",
-    "B_CROCUS_AP", "O_CROCUS_AP", "I_CROCUS_AP", "B_CROCUS_AP_TI", "O_CROCUS_AP_TI", "I_CROCUS_AP_TI"
+    "B_CROCUS_AP", "O_CROCUS_AP", "I_CROCUS_AP", "B_CROCUS_AP_TI", "O_CROCUS_AP_TI", "I_CROCUS_AP_TI",
+    "B_KVN_AP_F", "O_KVN_AP_F", "I_KVN_AP_F", "B_KVN_AP_TI_F", "O_KVN_AP_TI_F", "I_KVN_AP_TI_F",
+    "B_CROCUS_AP_F", "O_CROCUS_AP_F", "I_CROCUS_AP_F", "B_CROCUS_AP_TI_F", "O_CROCUS_AP_TI_F", "I_CROCUS_AP_TI_F"
 ];
 private _crocusAT = [
     "B_KVN_AT", "O_KVN_AT", "I_KVN_AT", "B_KVN_AT_TI", "O_KVN_AT_TI", "I_KVN_AT_TI",
-    "B_CROCUS_AT", "O_CROCUS_AT", "I_CROCUS_AT", "B_CROCUS_AT_TI", "O_CROCUS_AT_TI", "I_CROCUS_AT_TI"
+    "B_CROCUS_AT", "O_CROCUS_AT", "I_CROCUS_AT", "B_CROCUS_AT_TI", "O_CROCUS_AT_TI", "I_CROCUS_AT_TI",
+    "B_KVN_AT_F", "O_KVN_AT_F", "I_KVN_AT_F", "B_KVN_AT_TI_F", "O_KVN_AT_TI_F", "I_KVN_AT_TI_F",
+    "B_CROCUS_AT_F", "O_CROCUS_AT_F", "I_CROCUS_AT_F", "B_CROCUS_AT_TI_F", "O_CROCUS_AT_TI_F", "I_CROCUS_AT_TI_F"
 ];
 
 private _droneSpeedSetting = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 125]) / 3.6;
-if ((toUpper (typeOf _drone)) in _crocusAT) then {
+private _droneType = typeOf _drone;
+private _droneTypeLower = toLower _droneType;
+
+if ((toUpper _droneType) in _crocusAT) then {
     _crocus = true;
     _speed = _droneSpeedSetting;
 };
-if ((toUpper (typeOf _drone)) in _crocusAP) then {
+if ((toUpper _droneType) in _crocusAP) then {
     _crocus = true;
     _AP = true;
     _speed = _droneSpeedSetting;
     _minDistanceToTarget = 1;
 };
 
+// Generic AP detection for mod drones
+if (!_AP && {
+    ("_ap" in _droneTypeLower) || 
+    ("rkg" in _droneTypeLower) || 
+    ("og7v" in _droneTypeLower) || 
+    ("rc40_he" in _droneTypeLower) ||
+    ("_he" in _droneTypeLower) ||
+    ("frag" in _droneTypeLower) ||
+    ("personnel" in _droneTypeLower)
+}) then {
+    if (!("_at" in _droneTypeLower) && !("pg7" in _droneTypeLower)) then {
+        _AP = true;
+        _minDistanceToTarget = 1;
+    };
+};
+
 // UAFPV drones (Tom's Ukraine FPV and BIG GUY edits) — detect AP vs AT for turn rate/inertia tuning
-// All UAFPV drones are AP-type UNLESS their vehicle classname contains "_AT" (anti-tank variants)
-private _droneType = typeOf _drone;
-if (!_AP && { _droneType find "UAFPV" > -1 }) then {
-    if !(_droneType find "_AT" > -1) then {
+if (!_AP && { _droneTypeLower find "uafpv" > -1 }) then {
+    if !(_droneTypeLower find "_at" > -1) then {
         _AP = true;
         _minDistanceToTarget = 1;
     };
 };
 
 // RC-40 HE = AP loitering munition
-if (!_AP && { ["rc40_he", toLower _droneType] call BIS_fnc_inString }) then {
+if (!_AP && { ["rc40_he", _droneTypeLower] call BIS_fnc_inString }) then {
     _AP = true;
-    _minDistanceToTarget = 1;
+    _minDistanceToTarget = 1.2;
+};
+
+if (!_AP) then {
+    _minDistanceToTarget = 3.8; // Vehicles have 3-5m bounding boxes; detonate when within 3.8m of vehicle origin
+} else {
+    _minDistanceToTarget = 1.2;
 };
 
 if (_speed < _droneSpeedSetting) then {
@@ -106,9 +133,9 @@ _drone forceSpeed -1; // Disable speed limits to allow manual FPV velocity overr
 
 // Setup tracking variables
 private _targetLostTime = 0;
-private _maxTargetDistance = (missionNamespace getVariable ["CLDW_Setting_MaxRange", 1500]) + 150;
+private _maxTargetDistance = (missionNamespace getVariable ["CLDW_Setting_MaxRange", 1500]) + 1500;
 private _maxTimeWithoutLOS = 4.0;   // Seconds of lost LOS before disengaging (was 1.5)
-private _commitDistance    = 20;    // Within this range the drone ignores LOS and commits to the attack
+private _commitDistance    = 25;    // Within this range the drone ignores LOS and commits to the attack
 
 private _deltaTime = 0.05;
 private _targetPos = getPosASLVisual _target;
@@ -117,6 +144,9 @@ private _dist = 9999;
 
 // Minimum AGL altitude below which we won't attempt to pull out (not enough room to recover)
 private _minRecoveryAlt = 15;
+
+private _smoothedInterceptPos = _targetPos;
+private _currentRollDeg = 0;
 
 private _playerTookControl = false;
 while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}} do {
@@ -132,7 +162,18 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
     _targetPos = getPosASLVisual _target;
     
     _dist = _currentPos distance _targetPos;
-    if (_dist <= _minDistanceToTarget) exitWith {};
+
+    // Dynamically scale detonation distance based on frame velocity step so high-speed dives always detonate before physical ground impact
+    private _currentVelocity = velocity _drone;
+    private _currentSpeed = vectorMagnitude _currentVelocity;
+    private _frameStep = (_currentSpeed * _deltaTime) max 2.5;
+    private _detonationDistance = (_minDistanceToTarget + _frameStep) max 3.5;
+
+    // Also check ground terrain proximity when diving near target
+    private _droneAGL = (getPosASL _drone select 2) - (getTerrainHeightASL (getPosASL _drone));
+    private _terrainThreat = (_droneAGL < 2.0 && {_dist < 30});
+
+    if (_dist <= _detonationDistance || _terrainThreat) exitWith {};
 
     // 1. TELEPORT / RANGE GUARD: Break lock if target teleports away
     if (_dist > _maxTargetDistance) exitWith {
@@ -150,9 +191,15 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
 
     private _losBlocked = false;
     if (_dist > _commitDistance) then {
-        _losBlocked = terrainIntersectASL [_uavEye, _targetEye] || {
-            private _intersections = lineIntersectsSurfaces [_uavEye, _targetEye, _drone, _target, true, 1, "VIEW", "FIRE"];
-            count _intersections > 0
+        private _intersections = lineIntersectsSurfaces [_uavEye, _targetEye, _drone, vehicle _target, true, 1, "VIEW", "GEOM"];
+        if (count _intersections > 0) then {
+            private _hitObj = (_intersections select 0) select 2;
+            if (!isNull _hitObj && { _hitObj isKindOf "Building" || _hitObj isKindOf "House" }) then {
+                _losBlocked = true;
+            };
+        };
+        if (!_losBlocked) then {
+            _losBlocked = terrainIntersectASL [_uavEye, _targetEye];
         };
     };
 
@@ -163,21 +210,26 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
         _lastValidTargetPos = _targetPos; // Keep refreshing last known position while we have sight
     };
 
-    // 2.1 OBSTACLE DETECTION (COLLISION GUARD): Check if a solid obstacle (building/terrain) is directly in our flight path
-    private _forwardVector = velocity _drone;
-    if (_forwardVector isNotEqualTo [0,0,0]) then {
-        private _normalizedForward = vectorNormalized _forwardVector;
-        private _checkDist = (_speed * 0.25) max 8; // Check ahead by 0.25 seconds of flight (minimum 8m)
-        private _pathEnd = _currentPos vectorAdd (_normalizedForward vectorMultiply _checkDist);
-        private _intersections = lineIntersectsSurfaces [_currentPos, _pathEnd, _drone, _target, true, 1, "VIEW", "FIRE"];
-        if (count _intersections > 0) then {
-            private _intersection = _intersections select 0;
-            private _intersectObj = _intersection select 2;
-            private _isTargetOrVehicle = (!isNull _intersectObj && { _intersectObj == _target || _intersectObj isKindOf "AllVehicles" });
-            if (!_isTargetOrVehicle) then {
-                _targetLostTime = 99; // Force immediate disengagement with distinct code
-                if (missionNamespace getVariable ["ddtDebug", false]) then {
-                    systemChat "Collision threat detected! Aborting dive to avoid crash.";
+    // 2.1 OBSTACLE DETECTION (COLLISION GUARD): Check if a solid building/structure is directly in our flight path (disabled near target)
+    if (_dist > 40) then {
+        private _forwardVector = velocity _drone;
+        if (_forwardVector isNotEqualTo [0,0,0]) then {
+            private _normalizedForward = vectorNormalized _forwardVector;
+            private _checkDist = (_speed * 0.2) max 6; // Check ahead by 0.2 seconds of flight
+            private _pathEnd = _currentPos vectorAdd (_normalizedForward vectorMultiply _checkDist);
+            private _intersections = lineIntersectsSurfaces [_currentPos, _pathEnd, _drone, _target, true, 1, "VIEW", "FIRE"];
+            if (count _intersections > 0) then {
+                private _intersection = _intersections select 0;
+                private _intersectObj = _intersection select 2;
+                if (!isNull _intersectObj) then {
+                    // Only abort for solid buildings/houses or map structures, NOT foliage/trees/bushes/vehicles
+                    private _isSolidStructure = (_intersectObj isKindOf "Building" || _intersectObj isKindOf "House");
+                    if (_isSolidStructure) then {
+                        _targetLostTime = 99; // Abort dive to avoid crashing into a solid building
+                        if (missionNamespace getVariable ["ddtDebug", false]) then {
+                            systemChat "Collision threat (building) detected! Aborting dive.";
+                        };
+                    };
                 };
             };
         };
@@ -193,26 +245,36 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
         };
     };
 
-    // 3. SMOOTH TURN RATE PHYSICS
+    // Dynamic pursuit speed boost if target vehicle is driving fast
+    private _targetSpeedMS = (speed (vehicle _target)) / 3.6;
+    private _effectiveSpeed = _speed;
+    if (_targetSpeedMS > 0) then {
+        // Ensure drone speed is at least 8.5 m/s (~30 km/h) faster than the target vehicle to catch up
+        _effectiveSpeed = _speed max (_targetSpeedMS + 8.5);
+    };
+
+    // 3. FILTERED LEAD PURSUIT (Oscillation Prevention)
     // Lead prediction for moving targets: aim where the target will be when the drone intercepts it
-    private _targetVel = velocity _target;
-    private _timeToTarget = _dist / _speed;
-    private _leadTime = _timeToTarget min 1.5; // Cap prediction at 1.5 seconds ahead to avoid steering issues at long range
-    private _predictedPos = _targetPos vectorAdd (_targetVel vectorMultiply _leadTime);
+    private _targetVel = velocity (vehicle _target);
+    private _timeToTarget = _dist / (_effectiveSpeed max 1);
+    private _leadTime = _timeToTarget min 3.5; // Lead up to 3.5 seconds ahead for fast moving vehicles
+    private _rawPredictedPos = _targetPos vectorAdd (_targetVel vectorMultiply _leadTime);
+
+    // Smooth intercept position exponentially to avoid rapid nose jittering
+    _smoothedInterceptPos = (_smoothedInterceptPos vectorMultiply 0.7) vectorAdd (_rawPredictedPos vectorMultiply 0.3);
 
     // When LOS is blocked steer toward last KNOWN position so the drone keeps committing
-    // rather than awkwardly tracking a target it can't see through terrain.
     private _currentDir = vectorDirVisual _drone;
-    private _effectiveTargetPos = if (_losBlocked) then { _lastValidTargetPos } else { _predictedPos };
+    private _effectiveTargetPos = if (_losBlocked) then { _lastValidTargetPos } else { _smoothedInterceptPos };
     private _desiredDir = vectorNormalized (_effectiveTargetPos vectorDiff _currentPos);
 
     private _cos = _currentDir vectorDotProduct _desiredDir;
     _cos = (_cos min 1) max -1;
     private _angle = acos _cos;
 
-    // Scale turn rate and inertia dynamically with speed to keep steering tight and prevent overshoot
-    private _speedFactor = (_speed / 15) max 1;
-    private _maxTurnRate = (if (_AP) then { 90 } else { 75 }) * _speedFactor;
+    // 4. REALISTIC TURN RATE LIMITING
+    // Cap angular turn rate (degrees per second) so high speeds produce realistic wide turning arcs
+    private _maxTurnRate = if (_AP) then { 55 } else { 42 }; // degrees/second
     private _maxTurnAngle = _maxTurnRate * _deltaTime;
 
     private _newDir = _currentDir;
@@ -225,20 +287,55 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target}}
         };
     };
 
-    // Up vector calculation
-    private _rightVector = (_newDir vectorCrossProduct [0,0,1]) vectorMultiply -1;
-    private _upVector = _newDir vectorCrossProduct _rightVector;
+    // 5. AIRCRAFT BANKING (ROLL INTO TURNS)
+    // Calculate steering yaw demand on the horizontal plane
+    private _yawDemand = (_currentDir select 0) * (_desiredDir select 1) - (_currentDir select 1) * (_desiredDir select 0);
+    private _maxBankAngle = if (_AP) then { 50 } else { 40 }; // Maximum roll angle in degrees
+    private _targetRollDeg = ((-_yawDemand min 1) max -1) * _maxBankAngle;
 
-    _drone setVectorDirAndUp [_newDir, _upVector];
+    // Smoothly interpolate roll angle (wing bank rate ~120 deg/sec)
+    private _maxRollStep = 120 * _deltaTime;
+    private _rollDelta = (_targetRollDeg - _currentRollDeg) min _maxRollStep max (-_maxRollStep);
+    _currentRollDeg = _currentRollDeg + _rollDelta;
 
-    // 4. SMOOTH VELOCITY BLENDING (INERTIA)
-    private _currentVelocity = velocity _drone;
-    private _desiredVelocity = _newDir vectorMultiply _speed;
+    // Compute banked 3D orientation vectors (Dir and Up) with gimbal-lock safety for steep dives
+    private _refUp = [0, 0, 1];
+    if (abs (_newDir select 2) > 0.85) then {
+        _refUp = vectorUpVisual _drone;
+        if ((_refUp vectorCrossProduct _newDir) isEqualTo [0,0,0]) then {
+            _refUp = [0, 1, 0];
+        };
+    };
+    private _rightVector = vectorNormalized (_newDir vectorCrossProduct _refUp);
+    if (_rightVector isEqualTo [0,0,0]) then { _rightVector = [1,0,0]; };
+    private _normalUp = vectorNormalized (_rightVector vectorCrossProduct _newDir);
+    
+    // Rotate _normalUp around _newDir by _currentRollDeg
+    private _radRoll = _currentRollDeg * (pi / 180);
+    private _upBanked = (_normalUp vectorMultiply (cos _radRoll)) vectorAdd (_rightVector vectorMultiply (sin _radRoll));
 
-    // Inertia response (AT drone is heavier/more slide, AP drone is lighter/faster response)
-    private _inertiaBlend = (if (_AP) then { 0.12 } else { 0.08 }) * (_speedFactor min 2.0);
-    private _newVelocity = (_currentVelocity vectorMultiply (1 - _inertiaBlend)) vectorAdd (_desiredVelocity vectorMultiply _inertiaBlend);
+    _drone setVectorDirAndUp [_newDir, _upBanked];
 
+    // 6. REALISTIC ACCELERATION & FLIGHT INERTIA
+    // Drones accelerate towards target pursuit speed at a realistic quadcopter rate (~28-35 m/s²)
+    private _accelRate = if (_AP) then { 28 } else { 35 }; // m/s² acceleration rate
+    private _maxSpeedChange = _accelRate * _deltaTime;
+    private _targetSpeed = _currentSpeed;
+
+    if (_currentSpeed < _effectiveSpeed) then {
+        _targetSpeed = (_currentSpeed + _maxSpeedChange) min _effectiveSpeed;
+    } else {
+        _targetSpeed = (_currentSpeed - _maxSpeedChange) max _effectiveSpeed;
+    };
+
+    private _currentVelDir = vectorNormalized _currentVelocity;
+    if (_currentVelDir isEqualTo [0,0,0]) then { _currentVelDir = _newDir; };
+
+    // Blend flight direction (steering vector), then scale by ramped speed
+    private _inertiaBlend = if (_AP) then { 0.22 } else { 0.15 };
+    private _newVelDir = vectorNormalized ((_currentVelDir vectorMultiply (1 - _inertiaBlend)) vectorAdd (_newDir vectorMultiply _inertiaBlend));
+
+    private _newVelocity = _newVelDir vectorMultiply _targetSpeed;
     _drone setVelocity _newVelocity;
 
     sleep _deltaTime;
@@ -271,7 +368,8 @@ if (isNull _man || {!alive _man}) then {
 private _targetDied    = (!alive _target);
 private _losLost       = (_targetLostTime > _maxTimeWithoutLOS);
 private _outOfRange    = (_dist > _maxTargetDistance);
-private _closeEnough   = (_dist <= _minDistanceToTarget);
+// If drone distance <= detonationDistance OR if physical collision/death occurred within 15m of target, treat as successful detonation!
+private _closeEnough   = (_dist <= (_minDistanceToTarget + 4.0)) || (!alive _drone && {_dist < 15});
 private _lowAlt        = ((getPosASL _drone select 2) - (getTerrainHeightASL (getPosASL _drone)) < _minRecoveryAlt);
 
 if (_closeEnough) then {
@@ -328,25 +426,54 @@ if (_closeEnough) then {
                 if (_crocus) then { _drone call DB_fnc_fpv_onDestroy; };
             };
         } else {
-            // LOS lost but target is still within range – do NOT leave the squad.
-            // Re-enable AI, head to last known position, and re-enter the
-            // acquisition loop so the drone hunts the target down again.
+            // LOS lost but target is still within range – do NOT fly back to squad!
+            // Maintain drone's local pursuit from UAV perspective and attempt re-acquisition.
             if (alive _drone && {!isNull _man}) then {
                 if (missionNamespace getVariable ["ddtDebug", false]) then {
-                    systemChat "Drone: LOS lost, re-acquiring target...";
+                    systemChat "Drone: LOS lost, searching locally for target...";
                 };
-                if (_hasSplitGroup && {!isNull _opGrp}) then {
-                    (crew _drone) joinSilent _opGrp;
-                    deleteGroup _tempGrp;
+                
+                [_drone, _man, _lastValidTargetPos, _droneSpeedSetting, _minDistanceToTarget] spawn {
+                    params ["_drone", "_man", "_lastPos", "_speed", "_minDist"];
+                    if (isNull _drone || {!alive _drone}) exitWith {};
+                    
+                    _drone enableAI "PATH";
+                    _drone enableAI "MOVE";
+                    _drone flyInHeightASL [45, 45, 45];
+                    (driver _drone) doMove (ASLToAGL _lastPos);
+                    
+                    private _reacquired = false;
+                    private _searchTimeout = time + 8;
+                    
+                    while {alive _drone && {time < _searchTimeout} && {!_reacquired}} do {
+                        sleep 0.5;
+                        if (isNull _drone || {!alive _drone}) exitWith {};
+                        
+                        // Check targets from UAV's own perspective (high altitude vision)
+                        private _foundTargets = [_drone, 1500] call CLDW_fnc_getTargetsAT;
+                        if (count _foundTargets > 0) then {
+                            private _newTarget = _foundTargets select 0;
+                            if (!isNull _newTarget && {alive _newTarget}) then {
+                                _reacquired = true;
+                                _drone setVariable ["CLDW_Disengaged", false, true];
+                                _drone setVariable ["CLDW_CurrentTarget", _newTarget, true];
+                                if (missionNamespace getVariable ["ddtDebug", false]) then {
+                                    systemChat format ["Drone re-acquired target: %1!", typeOf _newTarget];
+                                };
+                                [_drone, _newTarget, _speed, _minDist] spawn CLDW_fnc_guideToTarget;
+                            };
+                        };
+                    };
+                    
+                    // Only disengage and return to squad if 8 seconds elapsed with zero targets anywhere in range
+                    if (!_reacquired && {alive _drone}) then {
+                        if (missionNamespace getVariable ["ddtDebug", false]) then {
+                            systemChat "Drone: Search timeout expired with no targets. Disengaging to squad.";
+                        };
+                        _drone setVariable ["CLDW_Disengaged", true, true];
+                        [_drone, _lastPos, _man] spawn CLDW_fnc_disengage;
+                    };
                 };
-                _drone enableAI "PATH";
-                _drone enableAI "MOVE";
-                _drone setVariable ["CLDW_Disengaged", false, true];
-                _drone setVariable ["CLDW_CurrentTarget", objNull, true];
-                // Fly toward last known target position immediately
-                _drone doMove (ASLToAGL _lastValidTargetPos);
-                // Re-enter scan loop – will re-engage if target reappears in range
-                [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
             };
         };
     };

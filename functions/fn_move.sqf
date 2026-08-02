@@ -3,8 +3,9 @@ params [["_drone", objNull], ["_pos", [0,0,0]]];
 if (isNull _drone) exitWith { [0,0,0] };
 
 // Check if the target is too far (teleport guard)
-private _maxRange = (missionNamespace getVariable ["CLDW_Setting_MaxRange", 1500]) + 300; 
 private _target = _drone getVariable ["CLDW_CurrentTarget", objNull];
+private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 1500];
+private _maxRange = _maxRangeSetting + (if (!isNull _target) then { 1500 } else { 800 }); 
 
 private _isTooFar = false;
 if (!isNull _target) then {
@@ -41,8 +42,26 @@ if (!_isMerged) then {
     _grp addWaypoint [_pos, 0];
     {_x setWaypointType "MOVE"} forEach (wayPoints _grp);
 };
-_drone doMove _pos;
-_drone setSpeedMode "FULL";
 private _cruiseSpeed = (missionNamespace getVariable ["CLDW_Setting_CruiseSpeed", 85]) / 3.6;
 _drone forceSpeed _cruiseSpeed;
+
+// Active velocity assistance with smooth acceleration so quadcopters cruise realistically
+private _dronePos = getPosASLVisual _drone;
+private _distToPos = _dronePos distance _pos;
+if (_distToPos > 3) then {
+    private _dirVector = vectorNormalized (_pos vectorDiff _dronePos);
+    private _targetVel = _dirVector vectorMultiply _cruiseSpeed;
+    private _curVel = velocity _drone;
+    private _curHorizVel = [(_curVel select 0), (_curVel select 1), 0];
+    private _desiredHorizVel = [(_targetVel select 0), (_targetVel select 1), 0];
+    
+    private _accelRate = 18; // m/s² cruise acceleration rate
+    private _maxVelChange = _accelRate * 0.1; // 10Hz tick step
+    private _velDiff = _desiredHorizVel vectorDiff _curHorizVel;
+    private _diffMag = vectorMagnitude _velDiff;
+    private _newHorizVel = if (_diffMag <= _maxVelChange) then { _desiredHorizVel } else { _curHorizVel vectorAdd ((vectorNormalized _velDiff) vectorMultiply _maxVelChange) };
+    
+    _drone setVelocity [(_newHorizVel select 0), (_newHorizVel select 1), (_curVel select 2) max -2];
+};
+
 _pos

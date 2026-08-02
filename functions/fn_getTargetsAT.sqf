@@ -46,9 +46,19 @@ if (isNull _uav) then {
 private _isAPDrone = false;
 
 if (!isNull _uav) then {
-    private _uavClass = typeOf _uav;
-    if (_uavClass == "B_Crocus_AP_F" || _uavClass == "O_Crocus_AP_F" || _uavClass == "I_Crocus_AP_F" || ["_AP_", _uavClass] call BIS_fnc_inString || ["UAFPV_IED_AP", _uavClass] call BIS_fnc_inString || ["UAFPV_OG7V_AP", _uavClass] call BIS_fnc_inString || ["UAFPV_RKG_AP", _uavClass] call BIS_fnc_inString || ["rc40_he", toLower _uavClass] call BIS_fnc_inString) then {
-        _isAPDrone = true;
+    private _uavClass = toLower (typeOf _uav);
+    if (
+        ("_ap" in _uavClass) || 
+        ("rkg" in _uavClass) || 
+        ("og7v" in _uavClass) || 
+        ("rc40_he" in _uavClass) ||
+        ("_he" in _uavClass) ||
+        ("frag" in _uavClass) ||
+        ("personnel" in _uavClass)
+    ) then {
+        if (!("_at" in _uavClass) && !("pg7" in _uavClass)) then {
+            _isAPDrone = true;
+        };
     };
 };
 
@@ -56,6 +66,7 @@ private _rawTargets = _man targets [true, _range];
 private _validTargets = [];
 
 private _atTargetsInfantry = missionNamespace getVariable ["CLDW_Setting_ATTargetsInfantry", false];
+private _threshold = missionNamespace getVariable ["ddtSoftThreshold", 100];
 
 {
     private _t = vehicle _x;
@@ -78,12 +89,22 @@ private _atTargetsInfantry = missionNamespace getVariable ["CLDW_Setting_ATTarge
         
         if (!_blocked) then {
             if (_isAPDrone) then {
-                // AP drones: always target infantry only
-                if (_t isKindOf "MAN") then { _validTargets pushBackUnique _t; };
+                // AP drones: target infantry AND soft vehicles (offroads, cars, trucks, light boats)
+                if (_t isKindOf "MAN") then {
+                    _validTargets pushBackUnique _t;
+                } else {
+                    private _isUnmanned = (_t isKindOf "UAV") || {_t isKindOf "UGV_01_base_F"} || {unitIsUAV _t} || {({ alive _x && !(_x getVariable ["CLDW_IsDroneCrew", false]) } count (crew _t)) == 0};
+                    private _isSoftVehicle = (_t isKindOf "Car") || {_t isKindOf "Truck"} || {_t isKindOf "Motorcycle"} || {_t isKindOf "Ship"} || { (getNumber(configFile >> "CfgVehicles" >> (typeOf _t) >> "armor")) <= (_threshold max 150) };
+                    private _isHeavyArmor = (_t isKindOf "Tank") || {_t isKindOf "APC"} || {_t isKindOf "Wheeled_APC_F"};
+                    if (!_isUnmanned && {isTouchingGround _t} && {_isSoftVehicle} && {!_isHeavyArmor}) then {
+                        _validTargets pushBackUnique _t;
+                    };
+                };
             } else {
-                // AT drones: primary targets are armoured/wheeled vehicles
-                if (_t isKindOf "Tank" || _t isKindOf "Car" || _t isKindOf "Wheeled_APC_F") then {
-                    if (isTouchingGround _t) then { _validTargets pushBackUnique _t; };
+                // AT drones: primary targets are manned armoured/wheeled vehicles
+                if (_t isKindOf "LandVehicle" || _t isKindOf "Ship") then {
+                    private _isUnmanned = (_t isKindOf "UAV") || {_t isKindOf "UGV_01_base_F"} || {unitIsUAV _t} || {({ alive _x && !(_x getVariable ["CLDW_IsDroneCrew", false]) } count (crew _t)) == 0};
+                    if (!_isUnmanned && {isTouchingGround _t}) then { _validTargets pushBackUnique _t; };
                 };
             };
         };
@@ -116,9 +137,16 @@ if (!_isAPDrone && _atTargetsInfantry && _validTargets isEqualTo []) then {
 
 // EMERGENCY FALLBACK
 if (_validTargets isEqualTo []) then {
+    private _allowInfantry = _isAPDrone || _atTargetsInfantry;
     _validTargets = _rawTargets select {
         private _t = vehicle _x;
-        if ((_man distance _t) <= _range && { ((side _t) getFriend _man_side < 0.6) && {isTouchingGround _t || _t isKindOf "MAN"} }) then {
+        private _isUnmanned = (_t isKindOf "UAV") || {_t isKindOf "UGV_01_base_F"} || {unitIsUAV _t} || {({ alive _x && !(_x getVariable ["CLDW_IsDroneCrew", false]) } count (crew _t)) == 0};
+        private _isValidType = if (_allowInfantry) then {
+            isTouchingGround _t || _t isKindOf "MAN"
+        } else {
+            (_t isKindOf "LandVehicle" || _t isKindOf "Ship") && {isTouchingGround _t}
+        };
+        if (!_isUnmanned && {(_man distance _t) <= _range} && { ((side _t) getFriend _man_side < 0.6) && _isValidType }) then {
             // Apply same LOS check for fallback targets to prevent cheating
             private _eyeStart = eyePos _man;
             if (_eyeStart isEqualTo [0,0,0]) then { _eyeStart = (getPosASL _man) vectorAdd [0,0,1.5]; };
