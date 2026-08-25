@@ -8,17 +8,29 @@ if (isNull _drone || {!alive _drone}) exitWith {};
 
 // Resolve operator dynamically if dead/null (teleport/despawn guard)
 if (isNull _man || {!alive _man}) then {
-    private _opGrp = _drone getVariable ["CLDW_OperatorGroup", grpNull];
-    if (!isNull _opGrp) then {
-        private _aliveUnits = (units _opGrp) select { alive _x };
-        if (count _aliveUnits > 0) then {
-            _man = leader _opGrp;
-            _drone setVariable ["CLDW_CurrentOperator", _man, true];
+    private _ownerVar = _drone getVariable ["ddtOwner", objNull];
+    if (_ownerVar isEqualType objNull && {!isNull _ownerVar}) then {
+        _man = _ownerVar;
+    } else {
+        if (_ownerVar isEqualType "" && {_ownerVar != ""}) then {
+            { if (str _x == _ownerVar) exitWith { _man = _x; }; } forEach allUnits;
+        };
+    };
+    if (isNull _man || {!alive _man}) then {
+        private _opGrp = _drone getVariable ["CLDW_OperatorGroup", grpNull];
+        if (!isNull _opGrp) then {
+            private _aliveUnits = (units _opGrp) select { alive _x };
+            if (count _aliveUnits > 0) then {
+                _man = leader _opGrp;
+                _drone setVariable ["CLDW_CurrentOperator", _man, true];
+                _drone setVariable ["ddtOwner", _man, true];
+                _drone setVariable ["ddtOwner", str _man, true];
+            };
         };
     };
 };
 
-// Leave the operator group to prevent overwriting squad waypoints
+// Leave the operator group during disengage return flight to prevent overwriting squad waypoints
 private _side = side _drone;
 private _grp = createGroup _side;
 (crew _drone) joinSilent _grp;
@@ -26,12 +38,6 @@ _grp setVariable ["daoExclude", true, true];
 _grp setVariable ["dceExclude", true, true];
 _grp setVariable ["Vcm_Disable", true, true];
 
-// -----------------------------------------------------------------------
-// HANDOFF - Do NOT fight the physics engine with manual velocity control.
-// The drone already has kinetic energy from the dive.  Simply re-enable AI
-// with an immediate destination; the UAV flight model will arc the drone
-// toward it naturally using its own inertia, producing a smooth pull-out.
-// -----------------------------------------------------------------------
 _drone enableAI "PATH";
 _drone enableAI "MOVE";
 _drone doWatch objNull;
@@ -47,6 +53,7 @@ if (!isNull _man && {alive _man}) then {
     private _wpImmediate = _grp addWaypoint [_manPos2DImmediate, 15];
     _wpImmediate setWaypointType "MOVE";
     _wpImmediate setWaypointSpeed "FULL";
+    (driver _drone) doMove _manPos2DImmediate;
     _drone doMove _manPos2DImmediate;
     _drone flyInHeight 25;
 
@@ -70,6 +77,8 @@ if (!isNull _man && {alive _man}) then {
                 if (count _aliveUnits > 0) then {
                     _man = leader _opGrp;
                     _drone setVariable ["CLDW_CurrentOperator", _man, true];
+                    _drone setVariable ["ddtOwner", _man, true];
+                    _drone setVariable ["ddtOwner", str _man, true];
                 };
             };
         };
@@ -86,6 +95,7 @@ if (!isNull _man && {alive _man}) then {
             private _wpReturn = _grp addWaypoint [_manPos2D, 15];
             _wpReturn setWaypointType "MOVE";
         };
+        (driver _drone) doMove _manPos2D;
         _drone doMove _manPos2D;
 
         private _dronePos = getPosASLVisual _drone;
@@ -112,7 +122,6 @@ if (!isNull _man && {alive _man}) then {
 
     if (!alive _drone || isNull _drone) exitWith {};
 
-    // If player took control, exit the function immediately
     private _controller2 = uavControl _drone select 0;
     if (!isNull _controller2 && {isPlayer _controller2}) exitWith {
         if (missionNamespace getVariable ["ddtDebug", false]) then {
@@ -137,7 +146,6 @@ if (!isNull _man && {alive _man}) then {
     if (_shouldJoin) then {
         (crew _drone) joinSilent _opGrp;
 
-        // Wait for async joinSilent to complete before deleting temp group
         private _crew = crew _drone;
         if (count _crew > 0) then {
             private _joinTimeout = time + 5;
@@ -149,6 +157,8 @@ if (!isNull _man && {alive _man}) then {
 
         _drone setVariable ["CLDW_Disengaged", false, true];
         _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+        _drone setVariable ["ddtOwner", _man, true];
+        _drone setVariable ["ddtOwner", str _man, true];
 
         sleep 1;
         deleteGroup _grp;
@@ -164,9 +174,10 @@ if (!isNull _man && {alive _man}) then {
             [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf";
         };
     } else {
-        // If the squad contains a player, keep the crew in the temporary group '_grp' to prevent UI clutter and softlocks
         _drone setVariable ["CLDW_Disengaged", false, true];
         _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+        _drone setVariable ["ddtOwner", _man, true];
+        _drone setVariable ["ddtOwner", str _man, true];
 
         private _uavType = toLower (typeOf _drone);
         private _isSuicide = (_uavType find "crocus" > -1) || 
@@ -180,7 +191,6 @@ if (!isNull _man && {alive _man}) then {
         };
     };
 } else {
-    // Operator is dead — delete crew so drone crashes
     if (missionNamespace getVariable ["ddtDebug", false]) then {
         systemChat "Drone disengaging: Operator dead, deleting crew to crash.";
     };
