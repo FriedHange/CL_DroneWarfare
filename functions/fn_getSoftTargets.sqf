@@ -1,6 +1,16 @@
-params [["_man", objNull], ["_rangeInput", 2000]];
+/*
+    File: fn_getSoftTargets.sqf
+    Author: Carl Lorenzo
+    Description:
+        Target acquisition for anti-personnel (AP) and light vehicle drone engagements.
+        Features:
+        1. Supports hostile infantry, soft-skinned ground vehicles, light naval craft, and airborne targets.
+        2. Strict anti-wallhack raycast LOS validation against terrain, buildings, and structures.
+        3. Unified speed integration.
+*/
 
-// If _man is a group, resolve it to the group leader unit
+params [["_man", objNull], ["_rangeInput", 750]];
+
 if (_man isEqualType grpNull) then { _man = leader _man; };
 if (isNull _man) exitWith { [] };
 
@@ -54,7 +64,7 @@ if (_man isKindOf "AllVehicles" && {!(_man isKindOf "Man")}) then {
 if (isNull _operator && isNull _uav) exitWith { [] };
 if (isNull _operator) then { _operator = _uav; };
 
-private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 1500];
+private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 750];
 private _range = _maxRangeSetting;
 if (!isNil "_rangeInput" && { _rangeInput isEqualType 0 } && { _rangeInput > 0 }) then {
     _range = _rangeInput min (round _maxRangeSetting);
@@ -70,10 +80,9 @@ if (_manSide == sideUnknown) then { _manSide = civilian; };
 
 private _threshold = missionNamespace getVariable ["ddtSoftThreshold", 100];
 
-// Gather all raw potential target candidates
+// Gather raw potential targets
 private _candidates = [];
 
-// 1. Perceived targets from operator / squad
 if (!isNull _operator && {_operator isKindOf "Man"}) then {
     _candidates append (_operator targets [true, _range]);
     if (!isNull (leader group _operator) && {leader group _operator != _operator}) then {
@@ -81,22 +90,21 @@ if (!isNull _operator && {_operator isKindOf "Man"}) then {
     };
 };
 
-// 2. Perceived targets from UAV pilot
 if (!isNull _uav) then {
     private _pilot = driver _uav;
     if (!isNull _pilot) then {
         _candidates append (_pilot targets [true, _range]);
     };
-    private _nearAroundUAV = (getPosATL _uav) nearEntities [["CAManBase", "LandVehicle", "Ship"], _range];
+    private _nearAroundUAV = (getPosATL _uav) nearEntities [["CAManBase", "LandVehicle", "Ship", "Air"], _range];
     _candidates append _nearAroundUAV;
 } else {
     if (!isNull _operator && {_operator isKindOf "Man"}) then {
-        private _nearAroundOp = (getPosATL _operator) nearEntities [["CAManBase", "LandVehicle", "Ship"], _range];
+        private _nearAroundOp = (getPosATL _operator) nearEntities [["CAManBase", "LandVehicle", "Ship", "Air"], _range];
         _candidates append _nearAroundOp;
     };
 };
 
-// Deduplicate candidate objects
+// Deduplicate candidates
 private _uniqueTargets = [];
 {
     private _veh = vehicle _x;
@@ -111,7 +119,7 @@ private _out = [];
     private _v = _x;
     if (alive _v) then {
         private _isDrone = (_v isKindOf "UAV") || {unitIsUAV _v} || {_v getVariable ["CLDW_IsDroneCrew", false]} || {_v getVariable ["USED", false]};
-        if (!_isDrone) then {
+        if (!_isDrone && {_v != _uav}) then {
             private _vSide = sideUnknown;
             if (_v isKindOf "CAManBase") then {
                 _vSide = side (group _v);
@@ -133,56 +141,54 @@ private _out = [];
             if (_isHostile) then {
                 private _dist = if (!isNull _uav) then { _uav distance _v } else { _operator distance _v };
                 if (_dist <= _range) then {
-                    private _vPosATL = getPosATL _v;
-                    private _isGroundTarget = if (_v isKindOf "Ship") then {
-                        true
+                    private _isSoftTarget = false;
+                    if (_v isKindOf "CAManBase") then {
+                        _isSoftTarget = true;
                     } else {
-                        (_vPosATL select 2) < 5 || isTouchingGround _v
+                        private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _v) >> "armor");
+                        private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} || {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} || {_v isKindOf "Air"} || {_armor <= (_threshold max 150)};
+                        private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} || {_v isKindOf "Wheeled_APC_F"};
+                        if (_isSoftVehicle && !_isHeavyArmor) then {
+                            _isSoftTarget = true;
+                        };
                     };
 
-                    if (_isGroundTarget) then {
-                        private _isSoftTarget = false;
-                        if (_v isKindOf "CAManBase") then {
-                            _isSoftTarget = true;
+                    if (_isSoftTarget) then {
+                        // Strict Raycast LOS validation (anti-wallhack)
+                        private _eyeStart = if (!isNull _uav) then {
+                            (getPosASL _uav) vectorAdd [0, 0, 0.4]
                         } else {
-                            private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _v) >> "armor");
-                            private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} || {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} || {_armor <= (_threshold max 150)};
-                            private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} || {_v isKindOf "Wheeled_APC_F"};
-                            if (_isSoftVehicle && !_isHeavyArmor) then {
-                                _isSoftTarget = true;
+                            eyePos _operator
+                        };
+                        if (_eyeStart isEqualTo [0,0,0]) then { _eyeStart = (getPosASL _operator) vectorAdd [0,0,1.5]; };
+
+                        private _eyeEnd = if (_v isKindOf "CAManBase") then {
+                            eyePos _v
+                        } else {
+                            (getPosASL _v) vectorAdd [0, 0, 0.8]
+                        };
+                        if (_eyeEnd isEqualTo [0,0,0]) then { _eyeEnd = (getPosASL _v) vectorAdd [0,0,1.0]; };
+
+                        private _losBlocked = terrainIntersectASL [_eyeStart, _eyeEnd];
+                        if (!_losBlocked) then {
+                            private _ignore1 = if (!isNull _uav) then { _uav } else { _operator };
+                            private _intersections = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _v, true, 1, "VIEW", "GEOM"];
+                            if (count _intersections > 0) then {
+                                private _hitObj = (_intersections select 0) select 2;
+                                if (!isNull _hitObj && { 
+                                    _hitObj isKindOf "Building" || 
+                                    _hitObj isKindOf "House" || 
+                                    _hitObj isKindOf "Wall" || 
+                                    _hitObj isKindOf "Strategic" || 
+                                    _hitObj isKindOf "NonStrategic" 
+                                }) then {
+                                    _losBlocked = true;
+                                };
                             };
                         };
 
-                        if (_isSoftTarget) then {
-                            private _eyeStart = if (!isNull _uav) then {
-                                (getPosASL _uav) vectorAdd [0, 0, 0.5]
-                            } else {
-                                eyePos _operator
-                            };
-                            if (_eyeStart isEqualTo [0,0,0]) then { _eyeStart = (getPosASL _operator) vectorAdd [0,0,1.5]; };
-
-                            private _eyeEnd = if (_v isKindOf "CAManBase") then {
-                                eyePos _v
-                            } else {
-                                (getPosASL _v) vectorAdd [0, 0, 1.0]
-                            };
-                            if (_eyeEnd isEqualTo [0,0,0]) then { _eyeEnd = (getPosASL _v) vectorAdd [0,0,1.2]; };
-
-                            private _losBlocked = terrainIntersectASL [_eyeStart, _eyeEnd];
-                            if (!_losBlocked) then {
-                                private _ignore1 = if (!isNull _uav) then { _uav } else { _operator };
-                                private _intersections = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _v, true, 1, "VIEW", "GEOM"];
-                                if (count _intersections > 0) then {
-                                    private _hitObj = (_intersections select 0) select 2;
-                                    if (!isNull _hitObj && { _hitObj isKindOf "Building" || _hitObj isKindOf "House" || _hitObj isKindOf "Wall" }) then {
-                                        _losBlocked = true;
-                                    };
-                                };
-                            };
-
-                            if (!_losBlocked) then {
-                                _out pushBackUnique _v;
-                            };
+                        if (!_losBlocked) then {
+                            _out pushBackUnique _v;
                         };
                     };
                 };

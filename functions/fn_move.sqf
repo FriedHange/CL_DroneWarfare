@@ -1,3 +1,11 @@
+/*
+    File: fn_move.sqf
+    Author: Carl Lorenzo
+    Description:
+        Handles cruising, squad-following, and waypoint navigation for UAVs using pure Vanilla AI flight.
+        Eliminates scripted velocity fighting, rubber-banding, and jitter.
+*/
+
 params [["_drone", objNull], ["_pos", [0,0,0]]];
 
 if (isNull _drone || {!alive _drone}) exitWith { [0,0,0] };
@@ -21,7 +29,7 @@ if (isNull _man || {!alive _man}) then {
     };
 };
 
-// Fallback for invalid/empty coordinates to prevent false teleport guards
+// Fallback for invalid/empty coordinates
 if (_pos isEqualTo [0,0,0] || {count _pos < 2}) then {
     if (!isNull _man && {alive _man}) then {
         _pos = getPosATL _man;
@@ -30,10 +38,10 @@ if (_pos isEqualTo [0,0,0] || {count _pos < 2}) then {
     };
 };
 
-// Check if the target is too far (teleport guard)
+// Range guard: prevent runaway drones from staying active indefinitely
 private _target = _drone getVariable ["CLDW_CurrentTarget", objNull];
-private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 1500];
-private _maxRange = _maxRangeSetting + (if (!isNull _target) then { 1500 } else { 800 }); 
+private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 750];
+private _maxRange = _maxRangeSetting + (if (!isNull _target) then { 750 } else { 400 }); 
 
 private _isTooFar = false;
 if (!isNull _target && {alive _target}) then {
@@ -52,48 +60,46 @@ if (_isTooFar) exitWith {
             [_drone, getPosASLVisual _drone, _man] spawn CLDW_fnc_disengage;
         } else {
             _drone setFuel 0;
-            if (!isNil "DB_fnc_fpv_onDestroy") then { _drone call DB_fnc_fpv_onDestroy; };
             _drone setDamage 1;
         };
     };
     _pos
 };
 
-// Standard move behavior
-private _grp = group (driver _drone);
-private _isMerged = (!isNull _man && {group _man == _grp});
-
-if (!_isMerged && {!isNull _grp}) then {
-    {deleteWaypoint _x} forEach (wayPoints _grp);
-    private _wp = _grp addWaypoint [_pos, 0];
-    _wp setWaypointType "MOVE";
-};
-
-// Always command the drone pilot directly
-(driver _drone) doMove _pos;
-_drone doMove _pos;
-
+// 1. Cruise Speed Configuration
 private _cruiseSpeed = (missionNamespace getVariable ["CLDW_Setting_CruiseSpeed", 85]) / 3.6;
+
+// 2. Pure Native Vanilla AI Piloting (Zero Script Fighting / Zero Jitter)
+_drone enableAI "PATH";
+_drone enableAI "MOVE";
+_drone setSpeedMode "FULL";
 _drone forceSpeed _cruiseSpeed;
 
-// Active velocity assistance with smooth acceleration so quadcopters cruise realistically
-private _dronePos = getPosASLVisual _drone;
-private _posASL = if (count _pos > 2) then { AGLToASL _pos } else { AGLToASL [_pos select 0, _pos select 1, 30] };
-private _distToPos = _dronePos distance _posASL;
-if (_distToPos > 3) then {
-    private _dirVector = vectorNormalized (_posASL vectorDiff _dronePos);
-    private _targetVel = _dirVector vectorMultiply _cruiseSpeed;
-    private _curVel = velocity _drone;
-    private _curHorizVel = [(_curVel select 0), (_curVel select 1), 0];
-    private _desiredHorizVel = [(_targetVel select 0), (_targetVel select 1), 0];
-    
-    private _accelRate = 18; // m/s² cruise acceleration rate
-    private _maxVelChange = _accelRate * 0.1; // 10Hz tick step
-    private _velDiff = _desiredHorizVel vectorDiff _curHorizVel;
-    private _diffMag = vectorMagnitude _velDiff;
-    private _newHorizVel = if (_diffMag <= _maxVelChange) then { _desiredHorizVel } else { _curHorizVel vectorAdd ((vectorNormalized _velDiff) vectorMultiply _maxVelChange) };
-    
-    _drone setVelocity [(_newHorizVel select 0), (_newHorizVel select 1), (_curVel select 2) max -2];
+// Maintain cruising altitude smoothly
+private _targetHeight = if (count _pos > 2) then { _pos select 2 } else { 35 };
+if (_targetHeight < 25) then { _targetHeight = 35; };
+_drone flyInHeight _targetHeight;
+
+// 3. Update Waypoints with Rate-Limiting
+private _lastMovePos = _drone getVariable ["CLDW_LastMoveCmdPos", [0,0,0]];
+private _lastMoveTime = _drone getVariable ["CLDW_LastMoveCmdTime", 0];
+
+if ((_pos distance _lastMovePos > 5) || (time - _lastMoveTime > 1.5)) then {
+    _drone setVariable ["CLDW_LastMoveCmdPos", _pos];
+    _drone setVariable ["CLDW_LastMoveCmdTime", time];
+
+    private _grp = group (driver _drone);
+    private _isMerged = (!isNull _man && {group _man == _grp});
+
+    if (!_isMerged && {!isNull _grp}) then {
+        { deleteWaypoint _x; } forEach (waypoints _grp);
+        private _wp = _grp addWaypoint [_pos, 0];
+        _wp setWaypointType "MOVE";
+        _wp setWaypointSpeed "FULL";
+    };
+
+    (driver _drone) doMove _pos;
+    _drone doMove _pos;
 };
 
 _pos

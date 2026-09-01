@@ -142,27 +142,18 @@
 [
 	"CLDW_Setting_MaxRange",
 	"SLIDER",
-	["Max Drone Targeting Range", "The maximum distance (in meters) the drone loop will scan for targets."],
+	["Max Drone Targeting Range (m)", "The maximum distance (in meters) the drone will scan and acquire targets."],
 	["CL Drone Warfare", "Flight Profile"],
-	[200, 3000, 1200, 0],
+	[150, 3000, 750, 0],
 	1
 ] call CBA_fnc_addSetting;
 
 [
 	"CLDW_Setting_DroneSpeed",
 	"SLIDER",
-	["Drone Dive Attack Speed (km/h)", "The speed of the drone during the FPV terminal dive/attack phase in km/h."],
+	["Drone Flight Speed (km/h)", "The top speed of the drone in km/h."],
 	["CL Drone Warfare", "Flight Profile"],
-	[50, 350, 100, 0],
-	1
-] call CBA_fnc_addSetting;
-
-[
-	"CLDW_Setting_CruiseSpeed",
-	"SLIDER",
-	["Drone Cruising Speed (km/h)", "The speed of the drone when patrolling, moving, or returning to the squad in km/h."],
-	["CL Drone Warfare", "Flight Profile"],
-	[30, 250, 85, 0],
+	[40, 250, 150, 0],
 	1
 ] call CBA_fnc_addSetting;
 
@@ -181,7 +172,7 @@
 [
 	"CLDW_Setting_MergeDroneGroup",
 	"CHECKBOX",
-	["Merge Drone Crew into Operator Group", "If checked, virtual drone crew units are joined silently into the operator's squad group. Disable if you experience empty group or performance issues."],
+	["Merge Drone Crew into Operator Group", "If checked, drone crew units are merged into the operator's squad."],
 	["CL Drone Warfare", "Deployment Behaviour"],
 	true,
 	1
@@ -192,8 +183,6 @@
 // =====================================
 // Each toggle enables/disables AI backpack distribution for that drone mod.
 // Drones from disabled mods will not be given to AI squads.
-// Note: RC-40, BlackHornet, Mavic, AR-2X/G, ED-1, and Vanilla drones are
-// recognised by CLDW but not distributed as backpacks (handled by DDT natively).
 
 // Crocus FPV (DarkBall) — AP and AT variants
 if (isClass (configFile >> "CfgVehicles" >> "B_Crocus_AP_Bag") || {
