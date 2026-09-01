@@ -34,6 +34,7 @@ class CfgFunctions
             class getSoftTargets {};
             class droneLoop { postInit = 1; }; 
             class guideToTarget {};
+            class predictImpactPoint {};
             class move {};
             class disengage {};
             class droneGroupAlive {};

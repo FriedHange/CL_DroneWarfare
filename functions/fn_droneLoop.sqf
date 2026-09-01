@@ -775,7 +775,7 @@ addMissionEventHandler ["EntityCreated", {
                                                              {!(_uavType find "blackhornet" > -1)} &&
                                                              {!(_uavType find "ied" > -1)};
                                         if (_isSuicide) then {
-                                            private _targets = [_drone, 750] call CLDW_fnc_getTargetsAT;
+                                            private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
                                             if (count _targets > 0) then {
                                                 private _target = _targets select 0;
                                                 private _speed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6;
@@ -858,8 +858,8 @@ addMissionEventHandler ["EntityCreated", {
                         if (_isSuicide) then {
                             private _heartbeat = _drone getVariable ["CLDW_FPV_Running", 0];
                             if (time > _heartbeat) then {
-                                // Check if targets are available up to 750m
-                                private _targets = [_drone, 750] call CLDW_fnc_getTargetsAT;
+                                // Check for targets within the configured engagement range.
+                                private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
                                 if (count _targets > 0) then {
                                     private _target = _targets select 0;
                                     private _speed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6;

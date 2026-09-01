@@ -144,7 +144,7 @@
 	"SLIDER",
 	["Max Drone Targeting Range (m)", "The maximum distance (in meters) the drone will scan and acquire targets."],
 	["CL Drone Warfare", "Flight Profile"],
-	[150, 3000, 750, 0],
+	[150, 5000, 2000, 0],
 	1
 ] call CBA_fnc_addSetting;
 

@@ -9,7 +9,7 @@
         3. Unified speed integration.
 */
 
-params [["_man", objNull], ["_rangeInput", 750]];
+params [["_man", objNull], ["_rangeInput", -1]];
 
 if (_man isEqualType grpNull) then { _man = leader _man; };
 if (isNull _man) exitWith { [] };
@@ -64,11 +64,8 @@ if (_man isKindOf "AllVehicles" && {!(_man isKindOf "Man")}) then {
 if (isNull _operator && isNull _uav) exitWith { [] };
 if (isNull _operator) then { _operator = _uav; };
 
-private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 750];
+private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000];
 private _range = _maxRangeSetting;
-if (!isNil "_rangeInput" && { _rangeInput isEqualType 0 } && { _rangeInput > 0 }) then {
-    _range = _rangeInput min (round _maxRangeSetting);
-};
 
 private _opGrp = if (!isNull _operator && {_operator isKindOf "Man"}) then { group _operator } else { grpNull };
 private _manSide = if (!isNull _opGrp) then { side _opGrp } else { side _operator };

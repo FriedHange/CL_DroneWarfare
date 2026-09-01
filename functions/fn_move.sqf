@@ -40,8 +40,8 @@ if (_pos isEqualTo [0,0,0] || {count _pos < 2}) then {
 
 // Range guard: prevent runaway drones from staying active indefinitely
 private _target = _drone getVariable ["CLDW_CurrentTarget", objNull];
-private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 750];
-private _maxRange = _maxRangeSetting + (if (!isNull _target) then { 750 } else { 400 }); 
+private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000];
+private _maxRange = _maxRangeSetting;
 
 private _isTooFar = false;
 if (!isNull _target && {alive _target}) then {
