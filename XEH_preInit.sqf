@@ -169,15 +169,6 @@
 // 	1
 // ] call CBA_fnc_addSetting;
 
-[
-	"CLDW_Setting_MergeDroneGroup",
-	"CHECKBOX",
-	["Merge Drone Crew into Operator Group", "If checked, drone crew units are merged into the operator's squad."],
-	["CL Drone Warfare", "Deployment Behaviour"],
-	true,
-	1
-] call CBA_fnc_addSetting;
-
 // =====================================
 // SUPPORTED MODS
 // =====================================

@@ -115,7 +115,7 @@ if (!isNull _uav) then {
 private _atTargetsInfantry = missionNamespace getVariable ["CLDW_Setting_ATTargetsInfantry", false];
 private _threshold = missionNamespace getVariable ["ddtSoftThreshold", 100];
 
-// Gather potential targets
+// Gather potential targets based on actual detection and vehicle signatures
 private _candidates = [];
 
 if (!isNull _operator && {_operator isKindOf "Man"}) then {
@@ -130,12 +130,17 @@ if (!isNull _uav) then {
     if (!isNull _pilot) then {
         _candidates append (_pilot targets [true, _range]);
     };
-    private _nearAroundUAV = (getPosATL _uav) nearEntities [["CAManBase", "LandVehicle", "Ship", "Air"], _range];
-    _candidates append _nearAroundUAV;
+    // Vehicles (engines, metal, heat signatures) can be detected within full range
+    private _nearVehicles = (getPosATL _uav) nearEntities [["LandVehicle", "Ship", "Air"], _range];
+    _candidates append _nearVehicles;
+    // Infantry without prior knowledge can only be spotted visually within direct visual search radius (max 600m)
+    private _nearInfantry = (getPosATL _uav) nearEntities ["CAManBase", 600 min _range];
+    _candidates append _nearInfantry;
 } else {
     if (!isNull _operator && {_operator isKindOf "Man"}) then {
-        private _nearAroundOp = (getPosATL _operator) nearEntities [["CAManBase", "LandVehicle", "Ship", "Air"], _range];
-        _candidates append _nearAroundOp;
+        // Ground operator scans vehicles within threat range
+        private _nearVehicles = (getPosATL _operator) nearEntities [["LandVehicle", "Ship", "Air"], _range min 1000];
+        _candidates append _nearVehicles;
     };
 };
 
@@ -208,8 +213,22 @@ private _validTargets = [];
                         };
                     };
 
+                    // Antistasi Petros / Rebel HQ Commander Protection
+                    private _isPetros = (_t == (missionNamespace getVariable ["petros", objNull])) ||
+                                        {_t getVariable ["isPetros", false]} ||
+                                        {(toLower (name _t)) find "petros" > -1};
+                    if (_isPetros) then {
+                        // In Antistasi, Petros is the rebel commander at the secret HQ.
+                        // He must never be targeted by ambient FPV drones unless an enemy squad has direct, close-quarters confirmed contact.
+                        private _opGrp = if (!isNull _operator && {_operator isKindOf "Man"}) then { group _operator } else { grpNull };
+                        private _knowsAbout = if (!isNull _opGrp) then { _opGrp knowsAbout _t } else { 0 };
+                        if (_dist > 400 || _knowsAbout < 1.5) then {
+                            _isTargetValidType = false;
+                        };
+                    };
+
                     if (_isTargetValidType) then {
-                        // Strict Raycast LOS validation (anti-wallhack)
+                        // Strict Raycast LOS & Engine Visibility validation (anti-wallhack & foliage check)
                         private _eyeStart = if (!isNull _uav) then {
                             (getPosASL _uav) vectorAdd [0, 0, 0.4]
                         } else {
@@ -224,19 +243,18 @@ private _validTargets = [];
                         };
                         if (_eyeEnd isEqualTo [0,0,0]) then { _eyeEnd = (getPosASL _t) vectorAdd [0,0,1.0]; };
 
+                        // 1. Terrain occlusion check
                         private _losBlocked = terrainIntersectASL [_eyeStart, _eyeEnd];
                         if (!_losBlocked) then {
                             private _ignore1 = if (!isNull _uav) then { _uav } else { _operator };
-                            private _intersections = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _t, true, 1, "VIEW", "GEOM"];
-                            if (count _intersections > 0) then {
-                                private _hitObj = (_intersections select 0) select 2;
-                                if (!isNull _hitObj && { 
-                                    _hitObj isKindOf "Building" || 
-                                    _hitObj isKindOf "House" || 
-                                    _hitObj isKindOf "Wall" || 
-                                    _hitObj isKindOf "Strategic" || 
-                                    _hitObj isKindOf "NonStrategic" 
-                                }) then {
+                            // 2. Engine visibility check (handles trees, bushes, forests, viewing obstacles)
+                            private _vis = [_ignore1, "VIEW", _t] checkVisibility [_eyeStart, _eyeEnd];
+                            if (_vis < 0.2) then {
+                                _losBlocked = true;
+                            } else {
+                                // 3. Surface intersection check (buildings, walls, rocks, structures, objects)
+                                private _intersections = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _t, true, 1, "VIEW", "GEOM"];
+                                if (count _intersections > 0) then {
                                     _losBlocked = true;
                                 };
                             };
@@ -259,19 +277,25 @@ if (!_isAPDrone && _validTargets isEqualTo []) then {
         if (alive _t && {_t isKindOf "CAManBase"}) then {
             private _isDrone = (_t getVariable ["CLDW_IsDroneCrew", false]) || {_t getVariable ["USED", false]};
             if (!_isDrone) then {
+                private _isPetros = (_t == (missionNamespace getVariable ["petros", objNull])) ||
+                                    {_t getVariable ["isPetros", false]} ||
+                                    {(toLower (name _t)) find "petros" > -1};
                 private _tSide = side (group _t);
                 private _isHostile = (_tSide != civilian && {_tSide != sideUnknown} && {_tSide != sideLogic}) && 
                                      { ([_manSide, _tSide] call BIS_fnc_areFriendly) isEqualTo false || { (_manSide getFriend _tSide < 0.6) || (_tSide getFriend _manSide < 0.6) } };
-                if (_isHostile) then {
+                if (_isHostile && !_isPetros) then {
                     private _dist = if (!isNull _uav) then { _uav distance _t } else { _operator distance _t };
                     if (_dist <= _range) then {
                         private _eyeStart = if (!isNull _uav) then { (getPosASL _uav) vectorAdd [0,0,0.4] } else { eyePos _operator };
                         private _eyeEnd = eyePos _t;
                         if (!terrainIntersectASL [_eyeStart, _eyeEnd]) then {
                             private _ignore1 = if (!isNull _uav) then { _uav } else { _operator };
-                            private _hits = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _t, true, 1, "VIEW", "GEOM"];
-                            if (count _hits == 0) then {
-                                _validTargets pushBackUnique _t;
+                            private _vis = [_ignore1, "VIEW", _t] checkVisibility [_eyeStart, _eyeEnd];
+                            if (_vis >= 0.2) then {
+                                private _hits = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _t, true, 1, "VIEW", "GEOM"];
+                                if (count _hits == 0) then {
+                                    _validTargets pushBackUnique _t;
+                                };
                             };
                         };
                     };

@@ -47,9 +47,11 @@ if (isNull _man || {!alive _man}) exitWith {
 
 private _side = side _drone;
 private _grp = group (driver _drone);
-if (isNull _grp) then {
-    _grp = createGroup _side;
+private _opGrp = if (!isNull _man) then { group _man } else { grpNull };
+if (isNull _grp || {!isNull _opGrp && {_grp == _opGrp}}) then {
+    _grp = createGroup [_side, true];
     (crew _drone) joinSilent _grp;
+    _grp deleteGroupWhenEmpty true;
 };
 
 _drone enableAI "PATH";

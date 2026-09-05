@@ -15,6 +15,7 @@ addMissionEventHandler ["EntityCreated", {
                                  {_lowerType find "rc-40" > -1} || 
                                  {_lowerType find "uav_02_ied" > -1} || 
                                  {_lowerType find "tura_uav" > -1} || 
+                                 {_lowerType find "uav_06" > -1} ||
                                  {_lowerType find "uas_06" > -1} ||
                                  {_lowerType find "fpv" > -1};
         if (_isExtendedUAV && {!(_lowerType find "shahed" > -1)}) then {
@@ -154,15 +155,11 @@ addMissionEventHandler ["EntityCreated", {
                         if (_x in switchableUnits) then { removeSwitchableUnit _x; };
                     } forEach _crew;
 
-                    if (missionNamespace getVariable ["CLDW_Setting_MergeDroneGroup", false] && {!isNull _opGrp} && {!({isPlayer _x} count (units _opGrp) > 0)}) then {
-                        _crew joinSilent _opGrp;
-                    } else {
-                        private _newGrp = createGroup _side;
-                        _crew joinSilent _newGrp;
-                        _newGrp deleteGroupWhenEmpty true;
-                        _newGrp setBehaviour "CARELESS";
-                        _newGrp setCombatMode "BLUE";
-                    };
+                    private _newGrp = createGroup [_side, true];
+                    _crew joinSilent _newGrp;
+                    _newGrp deleteGroupWhenEmpty true;
+                    _newGrp setBehaviour "CARELESS";
+                    _newGrp setCombatMode "BLUE";
                     
                     // Release captive status now that side is aligned
                     {
@@ -312,7 +309,7 @@ addMissionEventHandler ["EntityCreated", {
                             private _bp = backpack _x;
                             if (_bp != "") then {
                                 private _lowerBP = toLower _bp;
-                                private _isDroneBag = ("crocus" in _lowerBP) || ("kvn" in _lowerBP) || ("uafpv" in _lowerBP) || ("uas_06" in _lowerBP) || ("uav_02_ied" in _lowerBP) || ("tura_uav" in _lowerBP);
+                                private _isDroneBag = ("crocus" in _lowerBP) || ("kvn" in _lowerBP) || ("uafpv" in _lowerBP) || ("uav_06" in _lowerBP) || ("uas_06" in _lowerBP) || ("uav_01" in _lowerBP) || ("uav_02_ied" in _lowerBP) || ("tura_uav" in _lowerBP);
                                 if (_isDroneBag) then {
                                     private _inTurret = (vehicle _x != _x);
                                     private _onTower = ((getPosATL _x) select 2) > 1.8;
@@ -427,7 +424,7 @@ addMissionEventHandler ["EntityCreated", {
                         private _bp = backpack _unit;
                         if (_bp != "") then {
                             private _uavType = toLower _bp;
-                            private _isDroneBag = ("crocus" in _uavType) || ("kvn" in _uavType) || ("uafpv" in _uavType) || ("uas_06" in _uavType) || ("uav_02_ied" in _uavType) || ("tura_uav" in _uavType);
+                            private _isDroneBag = ("crocus" in _uavType) || ("kvn" in _uavType) || ("uafpv" in _uavType) || ("uav_06" in _uavType) || ("uas_06" in _uavType) || ("uav_01" in _uavType) || ("uav_02_ied" in _uavType) || ("tura_uav" in _uavType);
                             if (_isDroneBag) then {
                                 _currentOperators pushBackUnique _unit;
                             };
@@ -526,13 +523,21 @@ addMissionEventHandler ["EntityCreated", {
                                 _atBags append _at;
                             };
 
-                            // Fallback to vanilla AL-6 Darter if no mod bags are configured
+                            // Fallback to vanilla AL-6 UAV (Laws of War) or AR-2 Darter if no mod bags are configured
                             private _sideDrones = _apBags + _atBags;
                             if (_sideDrones isEqualTo []) then {
-                                _sideDrones = switch (_groupSide) do {
-                                    case west:  { ["B_UAS_06_backpack_F"] };
-                                    case east:  { ["O_UAS_06_backpack_F"] };
-                                    default     { ["I_UAS_06_backpack_F"] };
+                                _sideDrones = (switch (_groupSide) do {
+                                    case west:  { ["B_UAV_06_backpack_F"] };
+                                    case east:  { ["O_UAV_06_backpack_F"] };
+                                    default     { ["I_UAV_06_backpack_F"] };
+                                }) select { isClass (configFile >> "CfgVehicles" >> _x) };
+
+                                if (_sideDrones isEqualTo []) then {
+                                    _sideDrones = (switch (_groupSide) do {
+                                        case west:  { ["B_UAV_01_backpack_F"] };
+                                        case east:  { ["O_UAV_01_backpack_F"] };
+                                        default     { ["I_UAV_01_backpack_F"] };
+                                    }) select { isClass (configFile >> "CfgVehicles" >> _x) };
                                 };
                             };
                 
@@ -565,8 +570,12 @@ addMissionEventHandler ["EntityCreated", {
                                     if (_preferredTypes isEqualTo []) then { _preferredTypes = _secondaryPool; };
                                 };
                                 if (_preferredTypes isEqualTo []) then { _preferredTypes = _sideDrones; };
+                                if (_preferredTypes isEqualTo []) exitWith {};
 
                                 private _droneBackpack = selectRandom _preferredTypes; 
+                                if (!isClass (configFile >> "CfgVehicles" >> _droneBackpack)) exitWith {
+                                    diag_log format ["CLDW: Selected backpack %1 is not a valid CfgVehicles class.", _droneBackpack];
+                                };
                     
                                 if (backpack _operator != "") then {
                                     removeBackpack _operator;
@@ -585,45 +594,6 @@ addMissionEventHandler ["EntityCreated", {
                                         };
                                     };
 
-                                    if (missionNamespace getVariable ["CLDW_Setting_MergeDroneGroup", true]) then {
-                                        if !(_operator getVariable ["CLDW_DroneMonitor_Active", false]) then {
-                                            _operator setVariable ["CLDW_DroneMonitor_Active", true];
-                                            [_operator, group _operator] spawn {
-                                                params ["_operator", "_grp"];
-                                                while {alive _operator} do {
-                                                    if (backpack _operator == "") then {
-                                                        sleep 2;
-                                                        private _drones = nearestObjects [_operator, ["Air", "LandVehicle"], 50];
-                                                        {
-                                                            private _veh = _x;
-                                                            private _type = toLower (typeOf _veh);
-                                                            if ((_type find "crocus" > -1) || (_type find "kvn" > -1) || (_type find "uafpv" > -1) || (_veh isKindOf "UAV")) then {
-                                                                private _crew = crew _veh;
-                                                                if (count _crew > 0 && {group (_crew select 0) != _grp}) then {
-                                                                    { 
-                                                                        _x setVariable ["CLDW_IsDroneCrew", true, true]; 
-                                                                        _x setVariable ["USED", true, true];
-                                                                        if (_x in switchableUnits) then { removeSwitchableUnit _x; };
-                                                                    } forEach _crew;
-                                                                    if (!({isPlayer _x} count (units _grp) > 0)) then {
-                                                                        _crew joinSilent _grp;
-                                                                    } else {
-                                                                        private _separateGrp = createGroup (side _grp);
-                                                                        _crew joinSilent _separateGrp;
-                                                                        _separateGrp deleteGroupWhenEmpty true;
-                                                                    };
-                                                                };
-                                                            };
-                                                        } forEach _drones;
-                                                        waitUntil { sleep 5; !alive _operator || backpack _operator != "" };
-                                                    };
-                                                    sleep 2;
-                                                };
-                                                if (alive _operator) then { _operator setVariable ["CLDW_DroneMonitor_Active", false]; };
-                                            };
-                                        };
-                                    };
-                                    
                                     _currentOperators pushBack _operator;
                                     _group setVariable ["_chosen_drone_operators_list", _currentOperators]; 
                                     _group setVariable ["_drone_initialized", true]; 
@@ -641,7 +611,7 @@ addMissionEventHandler ["EntityCreated", {
                         private _op = _x;
                         private _bp = backpack _op;
                         private _uavType = toLower _bp;
-                        private _isDroneBag = ("crocus" in _uavType) || ("kvn" in _uavType) || ("uafpv" in _uavType) || ("uas_06" in _uavType) || ("uav_02_ied" in _uavType) || ("tura_uav" in _uavType) || ("rc40" in _uavType) || ("rc-40" in _uavType);
+                        private _isDroneBag = ("crocus" in _uavType) || ("kvn" in _uavType) || ("uafpv" in _uavType) || ("uav_06" in _uavType) || ("uas_06" in _uavType) || ("uav_01" in _uavType) || ("uav_02_ied" in _uavType) || ("tura_uav" in _uavType) || ("rc40" in _uavType) || ("rc-40" in _uavType);
 
                         // Give UAV Terminal ONLY to operators carrying drone backpacks or registered as operators
                         if (_isDroneBag || {_op in _currentOperators}) then {
@@ -671,10 +641,11 @@ addMissionEventHandler ["EntityCreated", {
                             if (isNull _nearestEnemy && {!isNull (leader group _op)}) then {
                                 _nearestEnemy = (leader group _op) findNearestEnemy (leader group _op);
                             };
+                            private _nearThreat = (!isNull _nearestEnemy && {_op distance _nearestEnemy <= 800});
                             private _inCombat = (behaviour _op in ["COMBAT", "STEALTH"]) || 
-                                                { !isNull _nearestEnemy } ||
-                                                { !((_op targets [true, 1200]) isEqualTo []) } ||
-                                                { !isNull (leader group _op) && { !(((leader group _op) targets [true, 1200]) isEqualTo []) } };
+                                                { _nearThreat } ||
+                                                { !((_op targets [true, 800]) isEqualTo []) } ||
+                                                { !isNull (leader group _op) && { !(((leader group _op) targets [true, 800]) isEqualTo []) } };
                             if (_inCombat) then {
                                 _op setVariable ["CLDW_Drone_Deploying", true];
                                 _op setVariable ["CLDW_Last_Drone_Deploy_Time", time, true];
@@ -730,14 +701,15 @@ addMissionEventHandler ["EntityCreated", {
                                         } forEach _crew;
 
                                         private _opGrp = group _operator;
-                                        if (missionNamespace getVariable ["CLDW_Setting_MergeDroneGroup", false] && {!isNull _opGrp} && {!({isPlayer _x} count (units _opGrp) > 0)}) then {
-                                            _crew joinSilent _opGrp;
-                                        } else {
-                                            private _separateGrp = createGroup (side _opGrp);
-                                            _crew joinSilent _separateGrp;
-                                            _separateGrp deleteGroupWhenEmpty true;
-                                            _separateGrp setBehaviour "CARELESS";
-                                            _separateGrp setCombatMode "BLUE";
+                                        private _separateGrp = createGroup [_groupSide, true];
+                                        _crew joinSilent _separateGrp;
+                                        _separateGrp deleteGroupWhenEmpty true;
+                                        _separateGrp setBehaviour "CARELESS";
+                                        _separateGrp setCombatMode "BLUE";
+
+                                        if (isDedicated || isServer) then {
+                                            _drone setOwner 2;
+                                            _separateGrp setGroupOwner 2;
                                         };
 
                                         if (missionNamespace getVariable ["CLDW_Setting_GiveAITerminal", true]) then {
@@ -904,7 +876,30 @@ addMissionEventHandler ["EntityCreated", {
                 };
             } forEach allUnits;
         };
- 
+
+        // Wreck cleanup: remove destroyed AI drones that native mod handlers leave behind.
+        // Runs OUTSIDE the enable gate so lingering wrecks are always cleaned up.
+        // A grace period lets each drone mod's own explosion/destruction scripts finish first;
+        // contact and detonation behavior itself is never modified.
+        {
+            private _drone = _x;
+            if (!alive _drone && {!(_drone getVariable ["CLDW_WreckCleanupScheduled", false])}) then {
+                private _isCLDWDrone = (_drone getVariable ["CLDW_AI_Spawned", false])
+                    || {!isNull (_drone getVariable ["CLDW_CurrentOperator", objNull])}
+                    || {{ _x getVariable ["CLDW_IsDroneCrew", false] } count (crew _drone) > 0};
+                if (_isCLDWDrone) then {
+                    _drone setVariable ["CLDW_WreckCleanupScheduled", true];
+                    [_drone] spawn {
+                        params ["_drone"];
+                        sleep 10; // Grace period for native explosion/deletion scripts
+                        if (isNull _drone) exitWith {};
+                        { _drone deleteVehicleCrew _x } forEach (crew _drone);
+                        deleteVehicle _drone;
+                    };
+                };
+            };
+        } forEach (vehicles select { _x isKindOf "UAV" || { _x isKindOf "Air" } });
+
         private _loopSpeed = missionNamespace getVariable ["CLDW_Setting_LoopSpeed", 10];
         if (_isFirstRun) then { _isFirstRun = false; sleep 1; } else { sleep _loopSpeed; }; 
     }; 

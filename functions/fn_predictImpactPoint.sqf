@@ -8,7 +8,7 @@ params [
     ["_fastTargetThreshold", 80],
     ["_leadOffset", 1],
     ["_predictionTimeCap", 2.5],
-    ["_vehicleAimHeightOffset", -2.5]
+    ["_vehicleAimHeightOffset", 0.0]
 ];
 
 if (isNull _drone || {isNull _target}) exitWith { [0, 0, 0] };
@@ -16,9 +16,11 @@ if (isNull _drone || {isNull _target}) exitWith { [0, 0, 0] };
 private _targetVehicle = vehicle _target;
 private _targetPos = AGLToASL (_targetVehicle modelToWorldVisual (boundingCenter _targetVehicle));
 
-// Vehicle bounding centers tend to sit too high for reliable FPV impacts.
+// Aim at vehicle center of mass (bounding center) clamped above ground level
 if !(_target isKindOf "CAManBase") then {
-    _targetPos set [2, (_targetPos select 2) + _vehicleAimHeightOffset];
+    private _targetTerrainH = getTerrainHeightASL _targetPos;
+    private _adjustedZ = ((_targetPos select 2) + _vehicleAimHeightOffset) max (_targetTerrainH + 0.8);
+    _targetPos set [2, _adjustedZ];
 };
 
 if (_target isKindOf "CAManBase" || {abs speed _targetVehicle < _fastTargetThreshold}) exitWith {

@@ -49,26 +49,7 @@ if (!_isSuicide) exitWith {
 // =====================================
 // 1. UNIFIED SPEED & PAYLOAD CONFIGURATION
 // =====================================
-private _maxDiveSpeed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6;
-private _isInfantry = _target isKindOf "CAManBase";
-private _infantrySpeedMultiplier = 0.7;
-private _infantryDiveSpeed = _maxDiveSpeed * _infantrySpeedMultiplier;
-private _speed = _maxDiveSpeed;
-private _fastTargetThreshold = 80;
-private _fastTargetLeadOffset = 1;
-private _predictionTimeCap = 2.5;
-private _vehicleDiveDistance = 1000;
-private _vehicleAimHeightOffset = -2.5;
-private _infantryWindup = 3;
-private _infantryWindupDistance = 150;
-private _windupTarget = _drone getVariable ["CLDW_WindupTarget", objNull];
-private _windupComplete = _windupTarget == _target && {_drone getVariable ["CLDW_WindupComplete", false]};
-if (_windupTarget != _target) then {
-    _drone setVariable ["CLDW_WindupTarget", _target];
-    _drone setVariable ["CLDW_WindupComplete", false];
-};
-private _windupStarted = _windupComplete;
-private _windupEndTime = -1;
+private _speed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6; // Convert km/h to m/s
 
 private _AP = false;
 if (
@@ -113,27 +94,33 @@ if (isNull _man || {!alive _man}) then {
     };
 };
 
-// Temporarily isolate drone crew into an independent group to prevent squad command interference
+// Ensure drone crew is ALWAYS isolated in its own dedicated UAV group (never mixed with infantry squads)
 private _droneCrew = crew _drone;
-private _tempGrp = grpNull;
-private _hasSplitGroup = false;
-
 if (count _droneCrew > 0) then {
     private _originalGrp = group (_droneCrew select 0);
-    if (!isNull _opGrp && {_originalGrp == _opGrp}) then {
-        _tempGrp = createGroup (side _drone);
-        _droneCrew joinSilent _tempGrp;
-        _hasSplitGroup = true;
+    if (isNull _originalGrp || {!isNull _opGrp && {_originalGrp == _opGrp}}) then {
+        private _droneGrp = createGroup [side _drone, true];
+        _droneCrew joinSilent _droneGrp;
+        _droneGrp deleteGroupWhenEmpty true;
     };
 };
 
-// 2. Enable Vanilla AI piloting & flight model
+// 2. Enable Vanilla AI piloting & flight model.
+// The drone mods' own flight/stabilization scripts rely on the AI pilot staying active.
 _drone enableAI "PATH";
 _drone enableAI "MOVE";
+private _driverUnit = driver _drone;
+if (!isNull _driverUnit) then {
+    _driverUnit enableAI "PATH";
+    _driverUnit enableAI "MOVE";
+};
 _drone forceSpeed _speed;
-(group (driver _drone)) setSpeedMode "FULL";
-(group (driver _drone)) setBehaviour "CARELESS";
-(group (driver _drone)) setCombatMode "BLUE";
+private _droneGrp = group _driverUnit;
+if (!isNull _droneGrp && {_droneGrp != _opGrp}) then {
+    _droneGrp setSpeedMode "FULL";
+    _droneGrp setBehaviour "CARELESS";
+    _droneGrp setCombatMode "BLUE";
+};
 
 // Disable collision between nearby UAVs to prevent mid-air team collisions
 private _nearDrones = nearestObjects [_drone, ["UAV", "Air"], 300];
@@ -158,11 +145,17 @@ private _maxTargetDistance = missionNamespace getVariable ["CLDW_Setting_MaxRang
 private _maxTimeWithoutLOS = 3.5; // Seconds before aborting engagement on lost sight
 private _commitDistance    = 15;  // Point of no return where drone commits fully to terminal impact
 
-private _deltaTime = 0.05; // 20 Hz smooth guidance loop
+// Distance-adaptive guidance tick: full 20 Hz is only needed for terminal guidance;
+// cruise phases run at 10-5 Hz. Keeps CPU load low when many drones are engaged at once.
+private _deltaTime = 0.05;
+private _lastTickTime = time;
+private _losCheckInterval = 0.25; // LOS raycasts are the heaviest per-tick cost: run at 4 Hz
+private _lastLosCheckTime = -1;
+private _losBlocked = false;
+private _obstacleDistance = 9999;
 private _targetPos = getPosASLVisual _target;
 private _lastValidTargetPos = getPosASLVisual _target;
 private _dist = 9999;
-private _impactDistance = 9999;
 private _minRecoveryAlt = 10; // Minimum altitude (m AGL) to safely execute a dive abort
 private _lastWpUpdateTime = 0;
 
@@ -181,23 +174,14 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
         _playerTookControl = true;
     };
     
+    // Actual measured step since the last iteration (clamped so server hitches cannot
+    // inflate the contact threshold or the acceleration budget)
+    _deltaTime = ((time - _lastTickTime) min 0.15) max 0.02;
+    _lastTickTime = time;
+
     private _currentPos = getPosASLVisual _drone;
     _targetPos = getPosASLVisual _target;
-    private _targetDistance = _currentPos distance _targetPos;
-    _dist = _targetDistance;
-    if (_isInfantry && {!_windupStarted} && {_targetDistance <= _infantryWindupDistance}) then {
-        _windupStarted = true;
-        _windupEndTime = time + (_infantryWindup max 0);
-    };
-    private _isWindingUp = _isInfantry && {time < _windupEndTime};
-    if (_isInfantry && {_windupStarted} && {!_isWindingUp} && {!_windupComplete}) then {
-        _windupComplete = true;
-        _drone setVariable ["CLDW_WindupComplete", true];
-    };
-    _speed = if (_isInfantry && {_windupStarted}) then { _infantryDiveSpeed } else { _maxDiveSpeed };
-    _drone forceSpeed _speed;
-    private _impactPoint = [_drone, _target, _speed, _fastTargetThreshold, _fastTargetLeadOffset, _predictionTimeCap, _vehicleAimHeightOffset] call CLDW_fnc_predictImpactPoint;
-    _impactDistance = _currentPos distance _impactPoint;
+    _dist = _currentPos distance _targetPos;
 
     // Contact threshold scaled by drone speed
     private _currentVelocity = velocity _drone;
@@ -206,7 +190,7 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
     private _detonationDistance = (_minDistanceToTarget + _frameStep) max 2.5;
 
     // Terminal proximity reached -> trigger explosion
-    if (!_isWindingUp && {_impactDistance <= _detonationDistance}) exitWith {};
+    if (_dist <= _detonationDistance) exitWith {};
 
     // 1. Engagement Range Guard
     if (_dist > _maxTargetDistance) exitWith {
@@ -216,38 +200,53 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
     };
 
     // 2. Strict Raycast LOS & Anti-Wallhack Occlusion Check
-    private _uavEye = eyePos _drone;
-    if (_uavEye isEqualTo [0,0,0]) then { _uavEye = _currentPos vectorAdd [0,0,0.4]; };
-    private _targetEye = eyePos _target;
-    if (_targetEye isEqualTo [0,0,0]) then { _targetEye = _targetPos vectorAdd [0,0,0.8]; };
+    // Rate-limited to every 250ms: raycasts are the most expensive per-tick work, and
+    // line of sight does not change meaningfully within a quarter second. Between checks
+    // the last known state is kept for the dive-abort logic.
+    if (time >= _lastLosCheckTime + _losCheckInterval || {_lastLosCheckTime < 0}) then {
+        private _losElapsed = ((time - _lastLosCheckTime) max _losCheckInterval) min 1.0;
+        _lastLosCheckTime = time;
 
-    private _losBlocked = false;
-    private _obstacleDistance = 9999;
+        private _uavEye = eyePos _drone;
+        if (_uavEye isEqualTo [0,0,0]) then { _uavEye = _currentPos vectorAdd [0,0,0.4]; };
+        private _targetEye = eyePos _target;
+        if (_targetEye isEqualTo [0,0,0]) then { _targetEye = _targetPos vectorAdd [0,0,0.8]; };
 
-    if (_dist > _commitDistance) then {
-        // Check structural intersections (buildings, houses, walls, static objects)
-        private _intersections = lineIntersectsSurfaces [_uavEye, _targetEye, _drone, vehicle _target, true, 1, "VIEW", "GEOM"];
-        if (count _intersections > 0) then {
-            private _hitInfo = _intersections select 0;
-            private _hitPos = _hitInfo select 0;
-            private _hitObj = _hitInfo select 2;
-            _obstacleDistance = _uavEye distance _hitPos;
+        _losBlocked = false;
+        _obstacleDistance = 9999;
 
-            // Block if hitting a building, wall, or landscape structure
-            if (!isNull _hitObj && { 
-                _hitObj isKindOf "Building" || 
-                _hitObj isKindOf "House" || 
-                _hitObj isKindOf "Wall" || 
-                _hitObj isKindOf "Strategic" || 
-                _hitObj isKindOf "NonStrategic" 
-            }) then {
-                _losBlocked = true;
+        if (_dist > _commitDistance) then {
+            // Check structural intersections (buildings, houses, walls, static objects)
+            private _intersections = lineIntersectsSurfaces [_uavEye, _targetEye, _drone, vehicle _target, true, 1, "VIEW", "GEOM"];
+            if (count _intersections > 0) then {
+                private _hitInfo = _intersections select 0;
+                private _hitPos = _hitInfo select 0;
+                private _hitObj = _hitInfo select 2;
+                _obstacleDistance = _uavEye distance _hitPos;
+
+                // Block if hitting a building, wall, or landscape structure
+                if (!isNull _hitObj && { 
+                    _hitObj isKindOf "Building" || 
+                    _hitObj isKindOf "House" || 
+                    _hitObj isKindOf "Wall" || 
+                    _hitObj isKindOf "Strategic" || 
+                    _hitObj isKindOf "NonStrategic" 
+                }) then {
+                    _losBlocked = true;
+                };
+            };
+
+            // Check terrain occlusion (mountains, hills, ridgelines)
+            if (!_losBlocked) then {
+                _losBlocked = terrainIntersectASL [_uavEye, _targetEye];
             };
         };
 
-        // Check terrain occlusion (mountains, hills, ridgelines)
-        if (!_losBlocked) then {
-            _losBlocked = terrainIntersectASL [_uavEye, _targetEye];
+        if (_losBlocked) then {
+            _targetLostTime = _targetLostTime + _losElapsed;
+        } else {
+            _targetLostTime = 0;
+            _lastValidTargetPos = _targetPos;
         };
     };
 
@@ -264,13 +263,6 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
 
     if (_diveAborted) exitWith {};
 
-    if (_losBlocked) then {
-        _targetLostTime = _targetLostTime + _deltaTime;
-    } else {
-        _targetLostTime = 0;
-        _lastValidTargetPos = _targetPos;
-    };
-
     // Abort if line of sight is continuously lost
     if (_targetLostTime > _maxTimeWithoutLOS) exitWith {
         if (missionNamespace getVariable ["ddtDebug", false]) then {
@@ -282,11 +274,25 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
     // 4. PROGRESSIVE ALTITUDE-BY-DISTANCE PROFILE & DYNAMIC DESCENT CALCULATION
     // =========================================================================
     private _dist2D = _currentPos distance2D _targetPos;
+    private _dist3D = _dist;
+    private _targetVel = velocity (vehicle _target);
+
+    // Dynamic Lead Compensation:
+    private _timeToTarget = _dist3D / (_speed max 1);
+    private _leadTime = if (_dist2D < 50) then {
+        // Pre-impact dynamic lead tracking target velocity
+        (_timeToTarget min 0.6) max 0.02
+    } else {
+        // Long-range trajectory lead
+        (_timeToTarget min 1.2) max 0.0
+    };
+    private _leadOffset = _targetVel vectorMultiply _leadTime;
+
     // Swarm lateral spread: maintains separation during approach and converges at < 50m
     private _spreadWeight = if (_dist2D > 50) then { 1.0 } else { (_dist2D max 0) / 50.0 };
     private _aimPos2D = [
-        (_impactPoint select 0) + ((_laneOffset select 0) * _spreadWeight),
-        (_impactPoint select 1) + ((_laneOffset select 1) * _spreadWeight)
+        (_targetPos select 0) + (_leadOffset select 0) + ((_laneOffset select 0) * _spreadWeight),
+        (_targetPos select 1) + (_leadOffset select 1) + ((_laneOffset select 1) * _spreadWeight)
     ];
 
     // Distance-to-Altitude Profile & Staging (Smoothstep Cubic Hermite Interpolation)
@@ -297,40 +303,35 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
     // - 100m -> 50m: Terminal guidance (20m -> 10m AGL)
     // - 50m -> 10m: Pre-impact alignment (10m -> 2.5m AGL)
     // - < 10m to 0m: Final strike point (direct center impact)
-    private _profileDistance = if (_isInfantry) then {
-        _dist2D
-    } else {
-        _dist2D * (350 / (_vehicleDiveDistance max 350))
-    };
     private _deltaZ = switch (true) do {
-        case (_profileDistance >= 350): { 70.0 };
-        case (_profileDistance >= 300): {
-            private _t = (_profileDistance - 300) / 50.0;
+        case (_dist2D >= 350): { 70.0 };
+        case (_dist2D >= 300): {
+            private _t = (_dist2D - 300) / 50.0;
             private _s = _t * _t * (3.0 - (2.0 * _t)); // Smoothstep cubic Hermite lerp
             60.0 + (10.0 * _s)
         };
-        case (_profileDistance >= 200): {
-            private _t = (_profileDistance - 200) / 100.0;
+        case (_dist2D >= 200): {
+            private _t = (_dist2D - 200) / 100.0;
             private _s = _t * _t * (3.0 - (2.0 * _t));
             40.0 + (20.0 * _s)
         };
-        case (_profileDistance >= 100): {
-            private _t = (_profileDistance - 100) / 100.0;
+        case (_dist2D >= 100): {
+            private _t = (_dist2D - 100) / 100.0;
             private _s = _t * _t * (3.0 - (2.0 * _t));
             20.0 + (20.0 * _s)
         };
-        case (_profileDistance >= 50): {
-            private _t = (_profileDistance - 50) / 50.0;
+        case (_dist2D >= 50): {
+            private _t = (_dist2D - 50) / 50.0;
             private _s = _t * _t * (3.0 - (2.0 * _t));
             10.0 + (10.0 * _s)
         };
-        case (_profileDistance >= 10): {
-            private _t = (_profileDistance - 10) / 40.0;
+        case (_dist2D >= 10): {
+            private _t = (_dist2D - 10) / 40.0;
             private _s = _t * _t * (3.0 - (2.0 * _t));
             2.5 + (7.5 * _s)
         };
         default {
-            private _t = (_profileDistance max 0) / 10.0;
+            private _t = (_dist2D max 0) / 10.0;
             private _s = _t * _t * (3.0 - (2.0 * _t));
             0.4 + (2.1 * _s)
         };
@@ -340,21 +341,11 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
     // Ensure no premature low-altitude leveling (drone never drops below 10m AGL when dist2D > 50m)
     private _terrainH = getTerrainHeightASL _aimPos2D;
     private _minAGL = if (_dist2D > 50) then { 10.0 } else { 0.3 };
-    private _desiredAltASL = ((_impactPoint select 2) + _deltaZ) max (_terrainH + _minAGL);
+    private _desiredAltASL = ((_targetPos select 2) + _deltaZ) max (_terrainH + _minAGL);
     private _desiredAimPosASL = [_aimPos2D select 0, _aimPos2D select 1, _desiredAltASL];
 
-    // Infantry remain in a visible staging orbit before their reduced-speed dive begins.
-    if (_isWindingUp) then {
-        private _windupAltitude = 35;
-        private _windupOffset = [sin _laneAngle * 20, cos _laneAngle * 20, _windupAltitude];
-        private _windupPosASL = _impactPoint vectorAdd _windupOffset;
-        private _windupTerrain = getTerrainHeightASL _windupPosASL;
-        _windupPosASL set [2, (_windupPosASL select 2) max (_windupTerrain + _windupAltitude)];
-        _desiredAimPosASL = _windupPosASL;
-    };
-
     // Update Vanilla AI Waypoint and AGL Altitude smoothly
-    _drone flyInHeight (if (_isWindingUp) then { 35 } else { _deltaZ max 2.0 });
+    _drone flyInHeight (_deltaZ max 2.0);
     if (time > _lastWpUpdateTime + 0.3) then {
         _lastWpUpdateTime = time;
         (driver _drone) doMove (ASLToAGL _desiredAimPosASL);
@@ -367,54 +358,55 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
     private _dirToAim = vectorNormalized (_desiredAimPosASL vectorDiff _currentPos);
     private _desiredVel = _dirToAim vectorMultiply _speed;
 
-    if (_isWindingUp) then {
-        private _windupSpeed = (_speed * 0.55) max 8;
-        private _windupDir = vectorNormalized (_desiredAimPosASL vectorDiff _currentPos);
-        private _desiredWindupVel = _windupDir vectorMultiply _windupSpeed;
-        private _windupVelDiff = _desiredWindupVel vectorDiff _currentVelocity;
-        private _windupDiffMag = vectorMagnitude _windupVelDiff;
-        private _windupMaxDeltaV = 8 * _deltaTime;
-        private _newWindupVel = if (_windupDiffMag <= _windupMaxDeltaV) then {
-            _desiredWindupVel
+    if (_dist > _commitDistance) then {
+        // Physics-based acceleration limits (max 12.0 m/s²): prevents instantaneous 0-to-100% snap
+        // Drones take ~2.5s to build full top speed and retain realistic momentum during turns
+        private _velDiff = _desiredVel vectorDiff _currentVelocity;
+        private _diffMag = vectorMagnitude _velDiff;
+        private _maxDeltaV = 12.0 * _deltaTime; // Max 12 m/s² acceleration rate
+        
+        private _newVel = if (_diffMag <= _maxDeltaV) then {
+            _desiredVel
         } else {
-            _currentVelocity vectorAdd ((vectorNormalized _windupVelDiff) vectorMultiply _windupMaxDeltaV)
+            _currentVelocity vectorAdd ((vectorNormalized _velDiff) vectorMultiply _maxDeltaV)
         };
-        _drone setVelocity _newWindupVel;
+        _drone setVelocity _newVel;
     } else {
-        if (_dist > _commitDistance) then {
-            // Physics-based acceleration limits (max 12.0 m/s²): prevents instantaneous 0-to-100% snap
-            // Drones take ~2.5s to build full top speed and retain realistic momentum during turns
-            private _velDiff = _desiredVel vectorDiff _currentVelocity;
-            private _diffMag = vectorMagnitude _velDiff;
-            private _maxDeltaV = 12.0 * _deltaTime; // Max 12 m/s² acceleration rate
-
-            private _newVel = if (_diffMag <= _maxDeltaV) then {
-                _desiredVel
-            } else {
-                _currentVelocity vectorAdd ((vectorNormalized _velDiff) vectorMultiply _maxDeltaV)
-            };
-            _drone setVelocity _newVel;
+        // Terminal strike (< 15m): smooth kinetic closure into target with natural inertia
+        private _strikeDir = vectorNormalized (_targetPos vectorDiff _currentPos);
+        private _desiredStrikeVel = _strikeDir vectorMultiply _speed;
+        private _velDiff = _desiredStrikeVel vectorDiff _currentVelocity;
+        private _diffMag = vectorMagnitude _velDiff;
+        private _maxDeltaV = 16.0 * _deltaTime;
+        
+        private _newVel = if (_diffMag <= _maxDeltaV) then {
+            _desiredStrikeVel
         } else {
-            // Keep predictive guidance active through impact against fast vehicles.
-            private _strikeDir = vectorNormalized (_impactPoint vectorDiff _currentPos);
-            private _desiredStrikeVel = _strikeDir vectorMultiply _speed;
-            private _velDiff = _desiredStrikeVel vectorDiff _currentVelocity;
-            private _diffMag = vectorMagnitude _velDiff;
-            private _maxDeltaV = 16.0 * _deltaTime;
-
-            private _newVel = if (_diffMag <= _maxDeltaV) then {
-                _desiredStrikeVel
-            } else {
-                _currentVelocity vectorAdd ((vectorNormalized _velDiff) vectorMultiply _maxDeltaV)
-            };
-            _drone setVelocity _newVel;
+            _currentVelocity vectorAdd ((vectorNormalized _velDiff) vectorMultiply _maxDeltaV)
         };
+        _drone setVelocity _newVel;
     };
 
-    sleep _deltaTime;
+    // Distance-adaptive tick rate: full 20 Hz only inside terminal range where impact
+    // detection and strike precision need it; slower cruise ticks quarter/ halve the
+    // per-drone script cost when many drones are airborne at once.
+    private _tickDelay = switch (true) do {
+        case (_dist > 300): { 0.2 };  // 5 Hz far cruise
+        case (_dist > 100): { 0.1 }; // 10 Hz approach
+        default            { 0.05 }; // 20 Hz terminal guidance
+    };
+    sleep _tickDelay;
 };
 
 if (isNull _drone) exitWith {};
+
+// Restore vanilla AI pathing features on exit if drone survives
+_drone enableAI "PATH";
+_drone enableAI "MOVE";
+if (!isNull (driver _drone)) then {
+    (driver _drone) enableAI "PATH";
+    (driver _drone) enableAI "MOVE";
+};
 
 // Manual player takeover exit
 if (_playerTookControl) exitWith {
@@ -435,8 +427,8 @@ if (_diveAborted) exitWith {
     _drone enableAI "PATH";
     _drone enableAI "MOVE";
     
-    [_drone, _target, _man, _lastValidTargetPos, _speed, _minDistanceToTarget, _opGrp, _tempGrp, _hasSplitGroup] spawn {
-        params ["_drone", "_target", "_man", "_lastPos", "_speed", "_minDist", "_opGrp", "_tempGrp", "_hasSplitGroup"];
+    [_drone, _target, _man, _lastValidTargetPos, _speed, _minDistanceToTarget, _opGrp] spawn {
+        params ["_drone", "_target", "_man", "_lastPos", "_speed", "_minDist", "_opGrp"];
         if (isNull _drone || {!alive _drone}) exitWith {};
 
         _drone enableAI "PATH";
@@ -489,10 +481,6 @@ if (_diveAborted) exitWith {
 
         // If target remains completely inaccessible after search, disengage to squad
         if (!_reacquired && {alive _drone}) then {
-            if (_hasSplitGroup && {!isNull _opGrp}) then {
-                (crew _drone) joinSilent _opGrp;
-                deleteGroup _tempGrp;
-            };
             _drone enableAI "PATH";
             _drone enableAI "MOVE";
             _drone setVariable ["CLDW_Disengaged", true, true];
@@ -518,11 +506,12 @@ if (isNull _man || {!alive _man}) then {
 private _targetDied    = (!alive _target);
 private _losLost       = (_targetLostTime > _maxTimeWithoutLOS);
 private _outOfRange    = (_dist > _maxTargetDistance);
-private _closeEnough   = (_impactDistance <= (_minDistanceToTarget + 4.0)) || (!alive _drone && {_dist < 12});
+private _targetActualDist = (getPosASLVisual _drone) distance (getPosASLVisual (vehicle _target));
+private _closeEnough   = (_dist <= (_minDistanceToTarget + 2.5)) || (_targetActualDist <= (_minDistanceToTarget + 2.5)) || (!alive _drone && {_dist < 15});
 private _lowAlt        = ((getPosASL _drone select 2) - (getTerrainHeightASL (getPosASL _drone)) < _minRecoveryAlt);
 
 if (_closeEnough) then {
-    // Normal terminal impact
+    // Normal terminal impact - drone mod handles its own explosion and deletion
     _drone setFuel 0;
 
     // Tag victim for Antistasi / RIS scoring
@@ -540,6 +529,11 @@ if (_closeEnough) then {
         } forEach _nearUnits;
     };
 
+    // If drone is still alive after contacting the target, trigger fatal damage so its native mod handler fires
+    if (alive _drone) then {
+        _drone setDamage 1;
+    };
+
 } else {
     if (_targetDied && {_lowAlt}) then {
         // Target died while drone was in unrecoverable low altitude dive
@@ -553,14 +547,14 @@ if (_closeEnough) then {
                 _x setVariable ["CLDW_LastDroneAttackerSide", side group _operator, true];
             } forEach _nearUnits;
         };
+
+        if (alive _drone) then {
+            _drone setDamage 1;
+        };
     } else {
         if (_outOfRange || _targetDied) then {
             // Target dead or out of range: disengage cleanly
             if (alive _drone && {!isNull _man}) then {
-                if (_hasSplitGroup && {!isNull _opGrp}) then {
-                    (crew _drone) joinSilent _opGrp;
-                    deleteGroup _tempGrp;
-                };
                 _drone enableAI "PATH";
                 _drone enableAI "MOVE";
                 _drone setVariable ["CLDW_Disengaged", true, true];
@@ -571,10 +565,6 @@ if (_closeEnough) then {
         } else {
             // Lost sight: pull up to search altitude and re-acquire
             if (alive _drone && {!isNull _man}) then {
-                if (_hasSplitGroup && {!isNull _opGrp}) then {
-                    (crew _drone) joinSilent _opGrp;
-                    deleteGroup _tempGrp;
-                };
                 _drone enableAI "PATH";
                 _drone enableAI "MOVE";
                 _drone setVariable ["CLDW_Disengaged", false, true];
