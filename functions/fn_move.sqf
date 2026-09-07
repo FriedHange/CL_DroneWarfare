@@ -67,7 +67,7 @@ if (_isTooFar) exitWith {
 };
 
 // 1. Cruise Speed Configuration
-private _cruiseSpeed = (missionNamespace getVariable ["CLDW_Setting_CruiseSpeed", 85]) / 3.6;
+private _cruiseSpeed = ((missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6) * 0.65; // Cruise at 65% of configured top speed
 
 // 2. Pure Native Vanilla AI Piloting (Zero Script Fighting / Zero Jitter)
 _drone enableAI "PATH";

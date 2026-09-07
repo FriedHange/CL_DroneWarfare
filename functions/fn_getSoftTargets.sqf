@@ -80,10 +80,30 @@ private _threshold = missionNamespace getVariable ["ddtSoftThreshold", 100];
 // Gather potential targets based on actual detection and vehicle signatures
 private _candidates = [];
 
-if (!isNull _operator && {_operator isKindOf "Man"}) then {
-    _candidates append (_operator targets [true, _range]);
-    if (!isNull (leader group _operator) && {leader group _operator != _operator}) then {
-        _candidates append ((leader group _operator) targets [true, _range]);
+// 1. Full squad target acquisition (all squad members, leadership nearTargets, and active squad combat enemies)
+if (!isNull _opGrp) then {
+    {
+        if (alive _x) then {
+            _candidates append (_x targets [true, _range]);
+            private _ne = _x findNearestEnemy _x;
+            if (!isNull _ne) then { _candidates pushBackUnique (vehicle _ne); };
+        };
+    } forEach (units _opGrp);
+
+    private _leader = leader _opGrp;
+    if (!isNull _leader) then {
+        {
+            private _tObj = _x select 4;
+            if (!isNull _tObj && {alive _tObj}) then {
+                _candidates pushBackUnique (vehicle _tObj);
+            };
+        } forEach (_leader nearTargets _range);
+    };
+} else {
+    if (!isNull _operator && {_operator isKindOf "Man"}) then {
+        _candidates append (_operator targets [true, _range]);
+        private _ne = _operator findNearestEnemy _operator;
+        if (!isNull _ne) then { _candidates pushBackUnique (vehicle _ne); };
     };
 };
 
@@ -185,19 +205,40 @@ private _out = [];
                         };
                         if (_eyeEnd isEqualTo [0,0,0]) then { _eyeEnd = (getPosASL _v) vectorAdd [0,0,1.0]; };
 
-                        // 1. Terrain occlusion check
-                        private _losBlocked = terrainIntersectASL [_eyeStart, _eyeEnd];
+                        // 1. Check if target is actively spotted or engaged by the squad
+                        private _isSquadTarget = (!isNull _opGrp && { _opGrp knowsAbout _v >= 0.8 }) ||
+                                                (!isNull _operator && { _operator knowsAbout _v >= 0.8 });
+
+                        private _checkStart = _eyeStart;
+                        if (_isSquadTarget && {!isNull _uav}) then {
+                            // Drone climbs to 70m approach altitude upon launch; evaluate terrain LOS from vantage height
+                            private _uavATL = getPosATL _uav;
+                            private _climbNeeded = (70 - (_uavATL select 2)) max 0;
+                            _checkStart = (getPosASL _uav) vectorAdd [0, 0, _climbNeeded min 50];
+                        };
+
+                        // 2. Terrain occlusion check
+                        private _losBlocked = terrainIntersectASL [_checkStart, _eyeEnd];
                         if (!_losBlocked) then {
                             private _ignore1 = if (!isNull _uav) then { _uav } else { _operator };
-                            // 2. Engine visibility check (handles trees, bushes, forests, viewing obstacles)
-                            private _vis = [_ignore1, "VIEW", _v] checkVisibility [_eyeStart, _eyeEnd];
-                            if (_vis < 0.2) then {
-                                _losBlocked = true;
-                            } else {
-                                // 3. Surface intersection check (buildings, walls, rocks, structures, objects)
-                                private _intersections = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _v, true, 1, "VIEW", "GEOM"];
+                            if (_isSquadTarget) then {
+                                private _intersections = lineIntersectsSurfaces [_checkStart, _eyeEnd, _ignore1, _v, true, 1, "VIEW", "GEOM"];
                                 if (count _intersections > 0) then {
+                                    private _hitObj = (_intersections select 0) select 2;
+                                    if (!isNull _hitObj && {_hitObj isKindOf "Building" || _hitObj isKindOf "House" || _hitObj isKindOf "Wall"}) then {
+                                        _losBlocked = true;
+                                    };
+                                };
+                            } else {
+                                // Direct visibility check for ambient unspotted targets
+                                private _vis = [_ignore1, "VIEW", _v] checkVisibility [_eyeStart, _eyeEnd];
+                                if (_vis < 0.2) then {
                                     _losBlocked = true;
+                                } else {
+                                    private _intersections = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _v, true, 1, "VIEW", "GEOM"];
+                                    if (count _intersections > 0) then {
+                                        _losBlocked = true;
+                                    };
                                 };
                             };
                         };

@@ -34,6 +34,7 @@ addMissionEventHandler ["EntityCreated", {
                 params ["_drone"];
                 sleep 0.1; // Wait for physics and ownership variables to initialize
                 if (isNull _drone) exitWith {};
+                if (!local _drone) exitWith {}; // Locality may have transferred during sleep; skip if drone is no longer local
                 
                 // Exclude player-owned, player-assembled, Zeus-placed, and editor-placed drones from safety overrides
                 if (!isNull findDisplay 312 || {count (allPlayers select { _x distance _drone < 10 }) > 0}) exitWith {};
@@ -81,6 +82,7 @@ addMissionEventHandler ["EntityCreated", {
                 params ["_drone"];
                 sleep 0.1; // Wait 1 frame to detect ownership variables
                 if (isNull _drone) exitWith {};
+                if (!local _drone) exitWith {}; // Locality may have transferred during sleep; skip if drone is no longer local
                 
                 // Exclude player-owned, player-assembled, and Zeus-placed drones from crew realignment
                 if (!isNull findDisplay 312 || {count (allPlayers select { _x distance _drone < 10 }) > 0}) exitWith {};
@@ -155,13 +157,16 @@ addMissionEventHandler ["EntityCreated", {
                         if (_x in switchableUnits) then { removeSwitchableUnit _x; };
                     } forEach _crew;
 
-                    private _newGrp = createGroup [_side, true];
-                    _crew joinSilent _newGrp;
-                    _newGrp deleteGroupWhenEmpty true;
-                    _newGrp setBehaviour "CARELESS";
-                    _newGrp setCombatMode "BLUE";
+                    // createGroup and joinSilent must only run on the server/dedi — they are not safe on clients
+                    if (isServer || isDedicated) then {
+                        private _newGrp = createGroup [_side, true];
+                        _crew joinSilent _newGrp;
+                        _newGrp deleteGroupWhenEmpty true;
+                        _newGrp setBehaviour "CARELESS";
+                        _newGrp setCombatMode "BLUE";
+                    };
                     
-                    // Release captive status now that side is aligned
+                    // Release captive status now that side is aligned (safe on all machines)
                     {
                         _x setCaptive false;
                     } forEach _crew;
@@ -523,9 +528,11 @@ addMissionEventHandler ["EntityCreated", {
                                 _atBags append _at;
                             };
 
-                            // Fallback to vanilla AL-6 UAV (Laws of War) or AR-2 Darter if no mod bags are configured
+                            // Fallback to vanilla AL-6 UAV (Laws of War) or AR-2 Darter if explicitly allowed and no mod bags or RF are loaded
                             private _sideDrones = _apBags + _atBags;
-                            if (_sideDrones isEqualTo []) then {
+                            private _rfLoaded = isClass (configFile >> "CfgMagazines" >> "1Rnd_RC40_HE_shell_RF");
+                            private _allowFallback = missionNamespace getVariable ["CLDW_Setting_AllowVanillaFallback", false];
+                            if (_sideDrones isEqualTo [] && {_allowFallback} && {!_rfLoaded}) then {
                                 _sideDrones = (switch (_groupSide) do {
                                     case west:  { ["B_UAV_06_backpack_F"] };
                                     case east:  { ["O_UAV_06_backpack_F"] };
@@ -684,6 +691,7 @@ addMissionEventHandler ["EntityCreated", {
                                     private _drone = createVehicle [_droneClass, _spawnPosFinal, [], 0, "FLY"];
                                     
                                     if (!isNull _drone) then {
+                                        diag_log format ["CLDW [Deploy]: '%1' deployed '%2' at %3 (machine %4).", name _operator, _droneClass, mapGridPosition _drone, clientOwner];
                                         _drone setVariable ["CLDW_AI_Spawned", true, true];
                                         _drone setVariable ["CLDW_CurrentOperator", _operator, true];
                                         _drone setVariable ["CLDW_OperatorGroup", group _operator, true];
@@ -708,8 +716,13 @@ addMissionEventHandler ["EntityCreated", {
                                         _separateGrp setCombatMode "BLUE";
 
                                         if (isDedicated || isServer) then {
-                                            _drone setOwner 2;
-                                            _separateGrp setGroupOwner 2;
+                                            // Prefer the Headless Client as the authority machine if one is connected.
+                                            // Hardcoding machine 2 crashes vanilla dedi servers that have no HC (machine 2 does not exist).
+                                            private _hcList = entities "HeadlessClient_F";
+                                            private _targetOwner = if (count _hcList > 0) then { owner (_hcList select 0) } else { 0 };
+                                            diag_log format ["CLDW [Locality]: Transferring '%1' to machine %2 (HC present: %3).", typeOf _drone, _targetOwner, count _hcList > 0];
+                                            (group _drone) setGroupOwner _targetOwner;
+                                            _separateGrp setGroupOwner _targetOwner;
                                         };
 
                                         if (missionNamespace getVariable ["CLDW_Setting_GiveAITerminal", true]) then {
@@ -757,6 +770,8 @@ addMissionEventHandler ["EntityCreated", {
                                             } else {
                                                 if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf") then {
                                                     [_drone, _operator] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+                                                } else {
+                                                    [_drone, getPosATL _operator] call CLDW_fnc_move;
                                                 };
                                             };
                                         } else {
@@ -828,8 +843,8 @@ addMissionEventHandler ["EntityCreated", {
                                              {!(_uavType find "ied" > -1)};
                         
                         if (_isSuicide) then {
-                            private _heartbeat = _drone getVariable ["CLDW_FPV_Running", 0];
-                            if (time > _heartbeat) then {
+                            private _currentTarget = _drone getVariable ["CLDW_CurrentTarget", objNull];
+                            if (isNull _currentTarget || {!alive _currentTarget}) then {
                                 // Check for targets within the configured engagement range.
                                 private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
                                 if (count _targets > 0) then {
@@ -841,6 +856,11 @@ addMissionEventHandler ["EntityCreated", {
                                         systemChat format ["CLDW: Drone %1 engaging target %2 from %3m!", typeOf _drone, typeOf _target, round (_drone distance _target)];
                                     };
                                     [_drone, _target, _speed, 0.1] spawn CLDW_fnc_guideToTarget;
+                                } else {
+                                    // Actively follow operator/squad in formation loiter so drone does not freeze/hover aimlessly
+                                    if (_drone distance _man > 30) then {
+                                        [_drone, getPosATL _man] call CLDW_fnc_move;
+                                    };
                                 };
                             };
                         };
@@ -888,6 +908,7 @@ addMissionEventHandler ["EntityCreated", {
                     || {!isNull (_drone getVariable ["CLDW_CurrentOperator", objNull])}
                     || {{ _x getVariable ["CLDW_IsDroneCrew", false] } count (crew _drone) > 0};
                 if (_isCLDWDrone) then {
+                    diag_log format ["CLDW [Cleanup]: Scheduling wreck deletion for '%1' in 10s.", typeOf _drone];
                     _drone setVariable ["CLDW_WreckCleanupScheduled", true];
                     [_drone] spawn {
                         params ["_drone"];

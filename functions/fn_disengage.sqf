@@ -16,6 +16,7 @@ if (isNull _drone || {!alive _drone}) exitWith {};
 // Mark drone as disengaging
 _drone setVariable ["CLDW_Disengaged", true, true];
 _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+diag_log format ["CLDW [Disengage]: '%1' disengaging, returning to '%2'.", typeOf _drone, if (!isNull _man && {alive _man}) then { name _man } else { "unresolved operator" }];
 
 // Resolve operator dynamically if dead/null
 if (isNull _man || {!alive _man}) then {
@@ -60,7 +61,7 @@ _drone doWatch objNull;
 _grp setBehaviour "CARELESS";
 _grp setCombatMode "BLUE";
 
-private _cruiseSpeed = (missionNamespace getVariable ["CLDW_Setting_CruiseSpeed", 85]) / 3.6;
+private _cruiseSpeed = ((missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6) * 0.65; // Cruise at 65% of configured top speed
 _drone setSpeedMode "FULL";
 _drone forceSpeed _cruiseSpeed;
 _drone flyInHeight 30;
@@ -91,6 +92,7 @@ while {alive _drone && {!isNull _drone} && {alive _man} && {!isNull _man} && {ti
 if (!alive _drone || isNull _drone) exitWith {};
 
 // Successfully back with the squad
+diag_log format ["CLDW [Disengage]: '%1' returned to squad formation near '%2'.", typeOf _drone, if (!isNull _man) then { name _man } else { "unknown" }];
 _drone setVariable ["CLDW_Disengaged", false, true];
 _drone setVariable ["CLDW_CurrentTarget", objNull, true];
 _drone setVariable ["ddtOwner", _man, true];
@@ -125,9 +127,23 @@ private _isSuicide = ((_uavType find "crocus" > -1) ||
 if (_isSuicide) then {
     if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf") then {
         [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+    } else {
+        // Immediate target acquisition on squad rejoin; loiter in formation if clear
+        private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
+        if (count _targets > 0) then {
+            private _target = _targets select 0;
+            private _speed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6;
+            _drone setVariable ["CLDW_Disengaged", false, true];
+            _drone setVariable ["CLDW_CurrentTarget", _target, true];
+            [_drone, _target, _speed, 0.1] spawn CLDW_fnc_guideToTarget;
+        } else {
+            [_drone, getPosATL _man] call CLDW_fnc_move;
+        };
     };
 } else {
     if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf") then {
         [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf";
+    } else {
+        [_drone, getPosATL _man] call CLDW_fnc_move;
     };
 };

@@ -17,36 +17,36 @@
 - Target acquisition, re-engagement, active guidance, and runaway protection now consistently use the configured range.
 - Removed remaining hardcoded 750-metre acquisition limits.
 
-### Vehicle Attacks
+### Mod Fallback Prevention
 
-- Added first-order target prediction for vehicles travelling at 80 km/h or faster.
-- Fast-vehicle interception now accounts for:
-  - Current vehicle position.
-  - Vehicle velocity.
-  - Estimated drone time to impact.
-  - An additional 1-metre forward lead.
-- Prediction look-ahead is capped at 2.5 seconds to prevent excessive lead after sudden direction changes.
-- Slow and stationary vehicles continue to receive direct attacks rather than predictive lead.
-- Aim point uses the vehicle bounding center clamped at least 0.8m above terrain, removing previous ground-skimming negative offsets.
-- Predictive aiming remains active during terminal guidance instead of reverting to the vehicle's current position at close range.
-- Vehicle descent now begins from 1,000 metres, giving drones more time to establish an interception course before fast vehicles can escape.
+- Prevented vanilla UAV backpacks (AR-2 Darter / AL-6) from being distributed when Reaction Forces is loaded.
+- Added a CBA setting `CLDW_Setting_AllowVanillaFallback` (default: false) allowing users to explicitly control whether vanilla fallback UAVs should ever be distributed.
+- Reaction Forces soldiers will now receive their RC-40 drone ammunition without being assigned unwanted vanilla UAV backpacks.
 
-### Infantry Balance
+### Vehicle & Helicopter Dive Distance
 
-- Added a phased infantry attack profile to provide counterplay.
-- The infantry wind-up begins when the drone reaches 150 metres from its target.
-- Drones stage for 3 seconds before beginning an infantry dive.
-- Infantry dives use 70% of the configured maximum drone speed.
-- Wind-up completion is retained if guidance restarts against the same infantry target after an obstruction or recovery manoeuvre.
-- Vehicle attacks remain immediate and use the full configured maximum speed.
+- Increased terminal dive initiation distance to 500m for all combat vehicles (tanks, APCs, trucks, cars, naval craft) and airborne helicopters.
+- Drones maintain high-altitude cruise (70m AGL above target/terrain) until reaching 500m, then smoothly descend along a Hermite glide corridor directly into the vehicle or helicopter.
+- Airborne helicopters are intercepted seamlessly at their target altitude.
 
-### Terminal Dive & Flight Smoothing
+### Visual Flight Physics & Tilt Bug Fix
 
-- **500ms Direction Check Cadence**: Decoupled target direction calculation, predictive lead recalculation, and waypoint projection from high-frequency physics ticks to run every ~500ms. This completely eliminates 20 Hz angular oscillations and visual jitter in terminal dives.
-- **Continuous Velocity Interpolation**: Retained 20 Hz (50ms) tick for smooth physics velocity application, allowing PhysX to accelerate cleanly along the steady guidance vector.
-- **Instant Proximity Detonation**: Proximity detection runs every 50ms against both the predicted impact point and actual vehicle bounding volume, ensuring immediate detonation on contact.
-- **Mod-Native Detonations**: Removed artificial payload ammo spawning and script deletions on impact; drones trigger `_drone setDamage 1;` so third-party drone mods (Crocus, KVN, UAFPV) handle their own native warhead explosions and deletions.
-- Improved drone vehicle-class resolution by preferring the backpack's configured `assembleTo` class.
+- Fixed the visual bug where drones tilted backwards when chasing a target.
+- Suppressed conflicting vanilla AI pilot cyclic braking during active script guidance (`disableAI "MOVE"` / `disableAI "PATH"`).
+- Applied realistic 3D orientation (`setVectorDirAndUp`) every tick:
+  - 20° nose-down forward pitch during horizontal high-speed cruise for authentic FPV flight.
+  - Smooth nose-down dive alignment along the 3D glide slope into the target during terminal dives.
+  - Dynamic banking (up to 25° roll) into turns based on yaw rate demand.
+  - Smooth angular blending eliminating visual snapping or angular jitter.
+- Restored AI pilot pathing and movement cleanly upon target impact, disengagement, or player takeover.
+
+### Active Squad Target Hunting & Idle Loiter
+
+- Resolved instances of drones hovering idly without actively seeking targets engaged by their squad:
+  - Expanded candidate acquisition to include the operator's entire squad (`units _opGrp`), squad leadership `nearTargets`, and active combat enemies (`findNearestEnemy`).
+  - Added approach-altitude vantage checks for squad-identified targets, allowing drones to take off and engage even when stationary near low ground obstacles (bushes, fences, low walls).
+  - Newly deployed drones and returning/disengaged drones now actively follow their squad in formation loiter (~35m AGL) rather than freezing stationary in the air.
+  - The idle monitor now actively commands drones to stay in formation with moving squads.
 
 ### Fixed Attack Profile Values
 
@@ -57,9 +57,9 @@ The following internal attack values are intentionally hardcoded and are no long
 | Fast-vehicle threshold | 80 km/h |
 | Fast-vehicle forward lead | 1 m |
 | Prediction time limit | 2.5 s |
-| Vehicle dive start distance | 1,000 m |
+| Vehicle & Heli dive start distance | 500 m |
 | Vehicle aim-height correction | 0.0 m (clamped >= 0.8m above ground) |
-| Guidance direction check interval | 500 ms (0.5 s) |
+| Guidance direction check interval | 50 ms (20 Hz in terminal dive) |
 | Infantry wind-up duration | 3 s |
 | Infantry wind-up distance | 150 m |
 | Infantry speed multiplier | 0.70 |

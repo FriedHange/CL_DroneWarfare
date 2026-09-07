@@ -96,6 +96,15 @@
 	1
 ] call CBA_fnc_addSetting;
 
+[
+	"CLDW_Setting_AllowVanillaFallback",
+	"CHECKBOX",
+	["Allow Vanilla Fallback UAVs", "If checked, AI squads will be assigned vanilla UAV backpacks (AR-2 Darter / AL-6) when no supported backpack drone mods are loaded. If unchecked, fallback UAV backpacks will not be distributed."],
+	["CL Drone Warfare", "Factions & Limits"],
+	false,
+	1
+] call CBA_fnc_addSetting;
+
 // =====================================
 // DRONE QUOTAS
 // =====================================
