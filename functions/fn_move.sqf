@@ -84,7 +84,7 @@ _drone flyInHeight _targetHeight;
 private _lastMovePos = _drone getVariable ["CLDW_LastMoveCmdPos", [0,0,0]];
 private _lastMoveTime = _drone getVariable ["CLDW_LastMoveCmdTime", 0];
 
-if ((_pos distance _lastMovePos > 5) || (time - _lastMoveTime > 1.5)) then {
+if ((_pos distance _lastMovePos > 5) || (time - _lastMoveTime > 4.0)) then {
     _drone setVariable ["CLDW_LastMoveCmdPos", _pos];
     _drone setVariable ["CLDW_LastMoveCmdTime", time];
 

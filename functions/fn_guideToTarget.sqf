@@ -53,9 +53,8 @@ private _maxDiveSpeed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed"
 private _speed = _maxDiveSpeed;
 private _fastTargetThreshold = 80;
 private _fastTargetLeadOffset = 1;
-private _predictionTimeCap = 2.5;
 private _vehicleDiveDistance = 500;
-private _vehicleAimHeightOffset = -2.5; // Aim below bounding center to hit vehicle body, not overshoot over roof
+private _vehicleAimHeightOffset = -2.5; // Aim below bounding centre to hit vehicle body, not fly over the roof
 
 private _AP = false;
 if (
@@ -82,6 +81,9 @@ if (!_AP) then {
     _minDistanceToTarget = 1.2; // Infantry and light vehicles
 };
 
+// Lead cap: AP targets infantry — tight, short lead (1.5s). AT targets vehicles — wider pursuit arc (2.5s).
+private _predictionTimeCap = if (_AP) then { 1.5 } else { 2.5 };
+
 if (missionNamespace getVariable ["ddtDebug", false]) then {
     systemChat format ["CLDW: FPV engaging %1 at full speed %2 km/h", typeOf _target, round (_speed * 3.6)];
 };
@@ -98,6 +100,10 @@ if (isNull _man || {!alive _man}) then {
             _drone setVariable ["CLDW_CurrentOperator", _man, true];
         };
     };
+};
+
+private _droneSide = if (!isNull _opGrp) then { side _opGrp } else {
+    if (!isNull _man) then { side group _man } else { side _drone }
 };
 
 // Ensure drone crew is ALWAYS isolated in its own dedicated UAV group (never mixed with infantry squads)
@@ -133,10 +139,12 @@ private _nearDrones = nearestObjects [_drone, ["UAV", "Air"], 300];
     };
 } forEach _nearDrones;
 
-// Unique swarm lane offset to prevent multiple drones attacking the same target from flying in single-file
+// Unique swarm lane offset to prevent multiple drones attacking the same target from flying in single-file.
+// AP drones use tighter lanes (small infantry targets); AT drones spread wider to bracket vehicles.
 private _droneIdNum = (parseNumber (str _drone select [count (str _drone) - 3])) max 0;
 private _laneAngle = ((_droneIdNum mod 8) * 45);
-private _laneDist = (((_droneIdNum mod 3) + 1) * 3.5); // 3.5m to 10.5m lateral separation
+private _laneDistBase = if (_AP) then { 1.5 } else { 3.0 }; // AP: 1.5–4.5m  AT: 3–9m
+private _laneDist = ((_droneIdNum mod 3) + 1) * _laneDistBase;
 private _laneOffset = [sin _laneAngle * _laneDist, cos _laneAngle * _laneDist];
 
 // =====================================
@@ -145,12 +153,17 @@ private _laneOffset = [sin _laneAngle * _laneDist, cos _laneAngle * _laneDist];
 private _targetLostTime = 0;
 private _maxTargetDistance = missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000];
 private _maxTimeWithoutLOS = 3.5; // Seconds before aborting engagement on lost sight
-private _commitDistance    = 25;  // Within this range the drone ignores LOS and commits
+// Commit distance: drone must start direct-aiming at the target early enough to correct its heading.
+// At 150 km/h (41.7 m/s) and 55 deg/s turn rate, correcting a 30 deg error needs ~0.55s = ~23m.
+// AP targets infantry (small hitbox) so needs a longer commit window than AT vs vehicles.
+private _commitDistance = if (_AP) then { 70 } else { 40 };
 
 private _deltaTime = 0.05;
 private _lastTickTime = time;
-private _losCheckInterval = 0.25;
+private _losCheckInterval = 0.75; // Rate-limit obstacle raycasts to 0.75s (optimized for large battles)
 private _lastLosCheckTime = -1;
+private _emptyCheckInterval = 3.0; // Check vehicle occupancy every 3.0s (optimized for large battles)
+private _lastEmptyCheckTime = -1;
 private _losBlocked = false;
 private _obstacleDistance = 9999;
 private _targetPos = getPosASLVisual _target;
@@ -163,6 +176,7 @@ private _smoothedInterceptPos = _targetPos;
 
 private _playerTookControl = false;
 private _diveAborted = false;
+private _emptyVehicleDisengaged = false;
 
 // =====================================
 // 3. MAIN GUIDANCE & ENGAGEMENT LOOP
@@ -202,7 +216,86 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
         };
     };
 
-    // 2. LOS Check (rate-limited to 4 Hz)
+    // 2. Empty Vehicle Check & Dismounted Passenger Priority (rate-limited to 3s for large battles)
+    if ((time >= _lastEmptyCheckTime + _emptyCheckInterval || {_lastEmptyCheckTime < 0}) && {_dist > 25}) then {
+        _lastEmptyCheckTime = time;
+
+        if (missionNamespace getVariable ["CLDW_Setting_PrioritizeDismounted", true]) then {
+            if (!(_target isKindOf "CAManBase")) then {
+                private _targetVeh = vehicle _target;
+                private _aliveCrew = (crew _targetVeh) select { alive _x };
+                if (count _aliveCrew == 0) then {
+                    // Target vehicle has become empty! Search for dismounted passengers / hostiles near the vehicle
+                    private _nearInf = (getPosATL _targetVeh) nearEntities ["CAManBase", 75];
+                    private _dismountedCandidates = _nearInf select {
+                        alive _x && 
+                        {!(_x getVariable ["CLDW_IsDroneCrew", false])} && 
+                        {!(_x getVariable ["USED", false])} && 
+                        {!(_x isKindOf "UAV")} &&
+                        {
+                            private _xSide = side (group _x);
+                            (_xSide != civilian && {_xSide != sideUnknown} && {_xSide != sideLogic}) && 
+                            { ([_droneSide, _xSide] call BIS_fnc_areFriendly) isEqualTo false || { (_droneSide getFriend _xSide < 0.6) || (_xSide getFriend _droneSide < 0.6) } }
+                        } &&
+                        {!(_x getVariable ["isPetros", false])}
+                    };
+
+                    if (count _dismountedCandidates > 0) then {
+                        // Prioritize units that were assigned to this vehicle, with deconfliction if another drone is already targeting them
+                        _dismountedCandidates = [_dismountedCandidates, [], {
+                            private _isAssigned = if (assignedVehicle _x == _targetVeh) then { 0 } else { 1 };
+                            private _assignedDrone = _x getVariable ["CLDW_AssignedDrone", objNull];
+                            private _conflictPenalty = if (!isNull _assignedDrone && {alive _assignedDrone} && {_assignedDrone != _drone}) then { 200 } else { 0 };
+                            [_isAssigned, (_currentPos distance _x) + _conflictPenalty]
+                        }, "ASCEND"] call BIS_fnc_sortBy;
+
+                        // Verify LOS to the best candidate
+                        private _uavEye = eyePos _drone;
+                        if (_uavEye isEqualTo [0,0,0]) then { _uavEye = _currentPos vectorAdd [0,0,0.4]; };
+                        private _foundCandidate = objNull;
+                        {
+                            private _eyeCand = eyePos _x;
+                            if (_eyeCand isEqualTo [0,0,0]) then { _eyeCand = (getPosASL _x) vectorAdd [0,0,1]; };
+                            if (!terrainIntersectASL [_uavEye, _eyeCand]) exitWith {
+                                _foundCandidate = _x;
+                            };
+                        } forEach _dismountedCandidates;
+
+                        if (!isNull _foundCandidate) then {
+                            // Smoothly switch target to dismounted passenger
+                            _target setVariable ["CLDW_AssignedDrone", objNull, true];
+                            _target = _foundCandidate;
+                            _target setVariable ["CLDW_AssignedDrone", _drone, true];
+                            _drone setVariable ["CLDW_CurrentTarget", _target, true];
+                            _minDistanceToTarget = 1.2;
+                            _lastValidTargetPos = getPosASLVisual _target;
+                            _smoothedInterceptPos = _lastValidTargetPos;
+
+                            diag_log format ["CLDW [Retarget]: Vehicle '%1' is empty. Retargeting to dismounted passenger '%2' at %3m.", 
+                                typeOf _targetVeh, name _target, round (_currentPos distance _target)];
+                            if (missionNamespace getVariable ["ddtDebug", false]) then {
+                                systemChat format ["CLDW: Target vehicle empty! Retargeting to dismounted passenger %1.", name _target];
+                            };
+                        } else {
+                            // Dismounted candidates exist but behind terrain, or no LOS; if safe distance, disengage
+                            if (_dist > 25) then {
+                                _emptyVehicleDisengaged = true;
+                            };
+                        };
+                    } else {
+                        // Vehicle is completely empty with no dismounted hostiles nearby
+                        if (_dist > 25) then {
+                            _emptyVehicleDisengaged = true;
+                        };
+                    };
+                };
+            };
+        };
+    };
+
+    if (_emptyVehicleDisengaged) exitWith {};
+
+    // 3. LOS & Obstacle Check (rate-limited to 0.75s)
     if (time >= _lastLosCheckTime + _losCheckInterval || {_lastLosCheckTime < 0}) then {
         private _losElapsed = ((time - _lastLosCheckTime) max _losCheckInterval) min 1.0;
         _lastLosCheckTime = time;
@@ -279,15 +372,19 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
     private _dist2D = _currentPos distance2D _targetPos;
     private _targetVel = velocity (vehicle _target);
     private _timeToTarget = _dist / (_effectiveSpeed max 1);
-    // Lead cap scales: close range = tight, long range = liberal (up to 3.5s)
-    private _leadTime = (_timeToTarget min 3.5) max 0;
+    // Lead cap: use _predictionTimeCap (AP: 1.5s, AT: 2.5s) — previously this was
+    // hardcoded to 3.5s, causing drones to aim metres ahead of stationary/slow infantry.
+    private _leadTime = (_timeToTarget min _predictionTimeCap) max 0;
     private _rawPredictedPos = _targetPos vectorAdd (_targetVel vectorMultiply _leadTime);
 
-    // Exponential smoothing to prevent nose jitter from sudden lead changes
-    _smoothedInterceptPos = (_smoothedInterceptPos vectorMultiply 0.75) vectorAdd (_rawPredictedPos vectorMultiply 0.25);
+    // Adaptive smoothing: sticky at long range (stability), fast at close range (accuracy).
+    // Within 150m the aim snaps quickly to the real target position instead of lagging behind.
+    private _smoothWeight = if (_dist < 150) then { 0.45 } else { 0.25 };
+    _smoothedInterceptPos = (_smoothedInterceptPos vectorMultiply (1 - _smoothWeight)) vectorAdd (_rawPredictedPos vectorMultiply _smoothWeight);
 
-    // Swarm lateral spread: lanes converge as the drone closes in
-    private _spreadWeight = if (_dist2D > 50) then { 1.0 } else { (_dist2D max 0) / 50.0 };
+    // Swarm lanes converge as the drone closes in. Start converging at 120m (was 50m)
+    // so the drone is already tracking the real target centre well before the final dive.
+    private _spreadWeight = if (_dist2D > 120) then { 1.0 } else { (_dist2D max 0) / 120.0 };
     private _interceptWithLane = [
         (_smoothedInterceptPos select 0) + ((_laneOffset select 0) * _spreadWeight),
         (_smoothedInterceptPos select 1) + ((_laneOffset select 1) * _spreadWeight),
@@ -310,7 +407,10 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
     };
     private _terrainH = getTerrainHeightASL [_interceptWithLane select 0, _interceptWithLane select 1];
     private _minAGL = if (_dist2D > 50) then { 10.0 } else { 0.3 };
-    private _desiredAltASL = ((_targetPos select 2) + _deltaZ) max (_terrainH + _minAGL);
+    // Apply vehicle aim height correction: aim 2.5m below bounding centre so AT drones
+    // hit the vehicle body instead of sailing over the roof during the terminal dive.
+    private _aimHeightAdj = if (!_AP && {_isVehicleOrAir}) then { _vehicleAimHeightOffset } else { 0 };
+    private _desiredAltASL = ((_targetPos select 2) + _deltaZ + _aimHeightAdj) max (_terrainH + _minAGL);
     private _desiredAimPosASL = [_interceptWithLane select 0, _interceptWithLane select 1, _desiredAltASL];
 
     // =========================================================================
@@ -404,6 +504,29 @@ if (_playerTookControl) exitWith {
     _drone setVariable ["CLDW_Disengaged", false, true];
 };
 
+// Empty vehicle disengagement exit: pull up, return to squad and clear target
+if (_emptyVehicleDisengaged) exitWith {
+    _target setVariable ["CLDW_AssignedDrone", objNull, true];
+    _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+    _drone setVariable ["CLDW_Disengaged", true, true];
+    _drone enableAI "PATH";
+    if (!isNull (driver _drone)) then {
+        (driver _drone) enableAI "PATH";
+    };
+
+    // Smooth pull-up maneuver away from vehicle/ground
+    private _curVel = velocity _drone;
+    _drone setVelocity [(_curVel select 0) * 0.7, (_curVel select 1) * 0.7, 15];
+
+    diag_log format ["CLDW [Disengage]: Target vehicle '%1' is empty. Disengaging at %2m. Returning to squad.", 
+        typeOf (vehicle _target), round _dist];
+    if (missionNamespace getVariable ["ddtDebug", false]) then {
+        systemChat format ["CLDW: Target vehicle %1 empty. Disengaging!", typeOf (vehicle _target)];
+    };
+
+    [_drone, _lastValidTargetPos, _man] spawn CLDW_fnc_disengage;
+};
+
 // =====================================
 // 4. DIVE ABORTION / PULL-UP & RE-ENGAGEMENT
 // =====================================
@@ -438,7 +561,7 @@ if (_diveAborted) exitWith {
         private _searchTimeout = time + 6.0;
 
         while {alive _drone && {!isNull _target} && {alive _target} && {time < _searchTimeout} && {!_reacquired}} do {
-            sleep 0.4;
+            sleep 0.8; // Rate-limited raycast check during altitude recovery
             if (isNull _drone || {!alive _drone}) exitWith {};
 
             // Check if clear line of sight is restored from the new angle

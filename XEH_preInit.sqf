@@ -53,7 +53,16 @@
 	"SLIDER",
 	["Launch Stagger Delay (Seconds)", "Minimum time between successive drone launches within the same squad. Prevents all operators deploying simultaneously, avoiding chain-reaction explosions that waste follow-up drones. Set to 0 to disable."],
 	["CL Drone Warfare", "General Settings"],
-	[0, 120, 20, 0],
+	[0, 120, 10, 0],
+	1
+] call CBA_fnc_addSetting;
+
+[
+	"CLDW_Setting_PrioritizeDismounted",
+	"CHECKBOX",
+	["Disengage Empty Vehicles & Prioritize Dismounted", "If checked, drones will disengage attacking vehicles that are empty (no alive crew or passengers) and prioritize dismounted passengers and crew instead."],
+	["CL Drone Warfare", "General Settings"],
+	true,
 	1
 ] call CBA_fnc_addSetting;
 

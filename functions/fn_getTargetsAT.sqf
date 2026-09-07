@@ -206,6 +206,20 @@ private _validTargets = [];
                     private _isInfantry = _t isKindOf "CAManBase";
                     // Support land, naval, and airborne vehicles (helicopters / planes)
                     private _isVehicle = (_t isKindOf "LandVehicle") || (_t isKindOf "Ship") || (_t isKindOf "Air");
+                    private _prioritizeDismounted = missionNamespace getVariable ["CLDW_Setting_PrioritizeDismounted", true];
+                    private _aliveCrew = if (_isVehicle) then { (crew _t) select { alive _x } } else { [] };
+                    private _isEmptyVehicle = _isVehicle && {(count _aliveCrew) == 0};
+
+                    // If vehicle is empty, search around it for dismounted passengers / hostiles and queue them
+                    if (_isEmptyVehicle && _prioritizeDismounted) then {
+                        private _nearDismounted = (getPosATL _t) nearEntities ["CAManBase", 75];
+                        {
+                            private _cand = _x;
+                            if (alive _cand && {!(_cand in _uniqueTargets)}) then {
+                                _uniqueTargets pushBack _cand;
+                            };
+                        } forEach _nearDismounted;
+                    };
 
                     private _isTargetValidType = false;
 
@@ -213,7 +227,7 @@ private _validTargets = [];
                         if (_isInfantry) then {
                             _isTargetValidType = true;
                         } else {
-                            if (_isVehicle) then {
+                            if (_isVehicle && !(_isEmptyVehicle && _prioritizeDismounted)) then {
                                 private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _t) >> "armor");
                                 private _isSoft = (_t isKindOf "Car") || {_t isKindOf "Truck"} || {_t isKindOf "Motorcycle"} || {_t isKindOf "Ship"} || {_t isKindOf "Air"} || {_armor <= (_threshold max 150)};
                                 private _isHeavy = (_t isKindOf "Tank") || {_t isKindOf "APC"} || {_t isKindOf "Wheeled_APC_F"};
@@ -223,11 +237,16 @@ private _validTargets = [];
                             };
                         };
                     } else {
-                        // AT Drone: all combat vehicles (ground and air) are primary
-                        if (_isVehicle) then {
+                        // AT Drone: combat vehicles with crew are primary; empty vehicles are excluded if setting enabled
+                        if (_isVehicle && !(_isEmptyVehicle && _prioritizeDismounted)) then {
                             _isTargetValidType = true;
                         } else {
-                            if (_isInfantry && _atTargetsInfantry) then {
+                            // Dismounted passengers from combat vehicles are valid targets for AT drones
+                            private _isDismounted = _isInfantry && {
+                                (!isNull (assignedVehicle _t)) || 
+                                { count ((getPosATL _t) nearEntities [["LandVehicle", "Ship", "Air"], 75]) > 0 }
+                            };
+                            if (_isInfantry && (_atTargetsInfantry || (_prioritizeDismounted && _isDismounted))) then {
                                 _isTargetValidType = true;
                             };
                         };
@@ -386,7 +405,14 @@ private _refPos = if (!isNull _uav) then { getPosASL _uav } else { getPosASL _op
     // Deconfliction: if another active drone is already hunting this target, add a 400m distance penalty
     private _assignedDrone = _x getVariable ["CLDW_AssignedDrone", objNull];
     private _penalty = if (!isNull _assignedDrone && {alive _assignedDrone} && {_assignedDrone != _uav}) then { 400 } else { 0 };
-    private _score = _d + _penalty;
+
+    // Dismounted priority bonus: prioritize dismounted passengers and crew
+    private _isDismounted = (_x isKindOf "CAManBase") && {
+        (!isNull (assignedVehicle _x)) || 
+        { count ((getPosATL _x) nearEntities [["LandVehicle", "Ship", "Air"], 75]) > 0 }
+    };
+    private _dismountBonus = if (_isDismounted && {missionNamespace getVariable ["CLDW_Setting_PrioritizeDismounted", true]}) then { -150 } else { 0 };
+    private _score = _d + _penalty + _dismountBonus;
 
     if (_score < _bestScore) then {
         _bestScore = _score;

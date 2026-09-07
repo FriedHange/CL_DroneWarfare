@@ -83,10 +83,17 @@ while {alive _drone && {!isNull _drone} && {alive _man} && {!isNull _man} && {ti
     if (_distToMan <= 25) exitWith {};
 
     private _curManPos2D = [getPosATL _man select 0, getPosATL _man select 1, 0];
-    (driver _drone) doMove _curManPos2D;
-    _drone doMove _curManPos2D;
+    private _lastMovePos = _drone getVariable ["CLDW_Disengage_LastPos", [0,0,0]];
+    private _lastMoveTime = _drone getVariable ["CLDW_Disengage_LastTime", 0];
 
-    sleep 1.0;
+    if ((_curManPos2D distance _lastMovePos > 8) || (time - _lastMoveTime > 5.0)) then {
+        _drone setVariable ["CLDW_Disengage_LastPos", _curManPos2D];
+        _drone setVariable ["CLDW_Disengage_LastTime", time];
+        (driver _drone) doMove _curManPos2D;
+        _drone doMove _curManPos2D;
+    };
+
+    sleep 2.0;
 };
 
 if (!alive _drone || isNull _drone) exitWith {};

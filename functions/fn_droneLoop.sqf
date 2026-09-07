@@ -658,7 +658,7 @@ addMissionEventHandler ["EntityCreated", {
                                 // within the same group so explosions don't chain-kill each other.
                                 // One getVariable read per operator per tick — zero network cost (no broadcast).
                                 private _lastGroupLaunch = _group getVariable ["CLDW_Group_Last_Launch", -9999];
-                                private _staggerDelay = missionNamespace getVariable ["CLDW_Setting_LaunchStagger", 20];
+                                private _staggerDelay = missionNamespace getVariable ["CLDW_Setting_LaunchStagger", 5];
                                 if ((time - _lastGroupLaunch) >= _staggerDelay) then {
                                     _group setVariable ["CLDW_Group_Last_Launch", time]; // Server-local, no broadcast needed
                                     _op setVariable ["CLDW_Drone_Deploying", true];

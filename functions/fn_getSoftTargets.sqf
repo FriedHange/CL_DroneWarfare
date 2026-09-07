@@ -164,14 +164,27 @@ private _out = [];
                 private _dist = if (!isNull _uav) then { _uav distance _v } else { _operator distance _v };
                 if (_dist <= _range) then {
                     private _isSoftTarget = false;
+                    private _prioritizeDismounted = missionNamespace getVariable ["CLDW_Setting_PrioritizeDismounted", true];
                     if (_v isKindOf "CAManBase") then {
                         _isSoftTarget = true;
                     } else {
-                        private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _v) >> "armor");
-                        private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} || {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} || {_v isKindOf "Air"} || {_armor <= (_threshold max 150)};
-                        private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} || {_v isKindOf "Wheeled_APC_F"};
-                        if (_isSoftVehicle && !_isHeavyArmor) then {
-                            _isSoftTarget = true;
+                        private _aliveCrew = (crew _v) select { alive _x };
+                        private _isEmptyVehicle = (count _aliveCrew) == 0;
+                        if (_isEmptyVehicle && _prioritizeDismounted) then {
+                            private _nearDismounted = (getPosATL _v) nearEntities ["CAManBase", 75];
+                            {
+                                private _cand = _x;
+                                if (alive _cand && {!(_cand in _uniqueTargets)}) then {
+                                    _uniqueTargets pushBack _cand;
+                                };
+                            } forEach _nearDismounted;
+                        } else {
+                            private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _v) >> "armor");
+                            private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} || {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} || {_v isKindOf "Air"} || {_armor <= (_threshold max 150)};
+                            private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} || {_v isKindOf "Wheeled_APC_F"};
+                            if (_isSoftVehicle && !_isHeavyArmor) then {
+                                _isSoftTarget = true;
+                            };
                         };
                     };
 
@@ -260,8 +273,14 @@ if !(_out isEqualTo []) then {
         private _refPos = getPosASL _uav;
         {
             private _d = _refPos distance (getPosASL _x);
-            if (_d < _minDist) then {
-                _minDist = _d;
+            private _isDismounted = (_x isKindOf "CAManBase") && {
+                (!isNull (assignedVehicle _x)) || 
+                { count ((getPosATL _x) nearEntities [["LandVehicle", "Ship", "Air"], 75]) > 0 }
+            };
+            private _dismountBonus = if (_isDismounted && {missionNamespace getVariable ["CLDW_Setting_PrioritizeDismounted", true]}) then { -150 } else { 0 };
+            private _score = _d + _dismountBonus;
+            if (_score < _minDist) then {
+                _minDist = _score;
                 _closestTarget = _x;
             };
         } forEach _out;
