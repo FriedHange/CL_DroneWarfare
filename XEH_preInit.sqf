@@ -48,6 +48,15 @@
 	1
 ] call CBA_fnc_addSetting;
 
+[
+	"CLDW_Setting_LaunchStagger",
+	"SLIDER",
+	["Launch Stagger Delay (Seconds)", "Minimum time between successive drone launches within the same squad. Prevents all operators deploying simultaneously, avoiding chain-reaction explosions that waste follow-up drones. Set to 0 to disable."],
+	["CL Drone Warfare", "General Settings"],
+	[0, 120, 20, 0],
+	1
+] call CBA_fnc_addSetting;
+
 // =====================================
 // FACTIONS & LIMITS
 // =====================================

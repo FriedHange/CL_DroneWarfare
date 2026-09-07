@@ -654,9 +654,16 @@ addMissionEventHandler ["EntityCreated", {
                                                 { !((_op targets [true, 800]) isEqualTo []) } ||
                                                 { !isNull (leader group _op) && { !(((leader group _op) targets [true, 800]) isEqualTo []) } };
                             if (_inCombat) then {
-                                _op setVariable ["CLDW_Drone_Deploying", true];
-                                _op setVariable ["CLDW_Last_Drone_Deploy_Time", time, true];
-                                [_op, _bp, _groupSide] spawn {
+                                // Stagger gate: enforce a minimum delay between successive drone launches
+                                // within the same group so explosions don't chain-kill each other.
+                                // One getVariable read per operator per tick — zero network cost (no broadcast).
+                                private _lastGroupLaunch = _group getVariable ["CLDW_Group_Last_Launch", -9999];
+                                private _staggerDelay = missionNamespace getVariable ["CLDW_Setting_LaunchStagger", 20];
+                                if ((time - _lastGroupLaunch) >= _staggerDelay) then {
+                                    _group setVariable ["CLDW_Group_Last_Launch", time]; // Server-local, no broadcast needed
+                                    _op setVariable ["CLDW_Drone_Deploying", true];
+                                    _op setVariable ["CLDW_Last_Drone_Deploy_Time", time, true];
+                                    [_op, _bp, _groupSide] spawn {
                                     params ["_operator", "_droneBackpack", "_groupSide"];
                                     sleep (1 + random 3);
                                     if (isNull _operator || {!alive _operator} || {backpack _operator != _droneBackpack}) exitWith {
@@ -785,8 +792,9 @@ addMissionEventHandler ["EntityCreated", {
                                         };
                                     };
                                     _operator setVariable ["CLDW_Drone_Deploying", false];
-                                };
-                            };
+                                }; // end spawn
+                                }; // end stagger gate
+                            }; // end _inCombat
                         };
                     } forEach units _group;
                 }; 
