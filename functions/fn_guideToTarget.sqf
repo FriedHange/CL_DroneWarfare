@@ -223,7 +223,10 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {alive _target} 
         if (missionNamespace getVariable ["CLDW_Setting_PrioritizeDismounted", true]) then {
             if (!(_target isKindOf "CAManBase")) then {
                 private _targetVeh = vehicle _target;
-                private _aliveCrew = (crew _targetVeh) select { alive _x };
+                // crew only returns AI; fullCrew includes players riding as passengers/driver.
+                // Without fullCrew, a player-only vehicle registers as empty and is skipped.
+                private _allOccupants = (crew _targetVeh) + ((fullCrew _targetVeh) select { isPlayer _x && !(_x in (crew _targetVeh)) });
+                private _aliveCrew = _allOccupants select { alive _x };
                 if (count _aliveCrew == 0) then {
                     // Target vehicle has become empty! Search for dismounted passengers / hostiles near the vehicle
                     private _nearInf = (getPosATL _targetVeh) nearEntities ["CAManBase", 75];
@@ -608,12 +611,16 @@ if (isNull _man || {!alive _man}) then {
 };
 
 // Determine terminal exit outcome
+// SAFETY: Check drone validity before any property access
+if (isNull _drone) exitWith {};
 private _targetDied    = (!alive _target);
 private _losLost       = (_targetLostTime > _maxTimeWithoutLOS);
 private _outOfRange    = (_dist > _maxTargetDistance);
-private _targetActualDist = (getPosASLVisual _drone) distance (getPosASLVisual (vehicle _target));
-private _closeEnough   = (_dist <= (_minDistanceToTarget + 2.5)) || (_targetActualDist <= (_minDistanceToTarget + 2.5)) || (!alive _drone && {_dist < 15});
-private _lowAlt        = ((getPosASL _drone select 2) - (getTerrainHeightASL (getPosASL _drone)) < _minRecoveryAlt);
+private _droneAlive    = alive _drone;
+private _targetActualDist = if (_droneAlive) then { (getPosASLVisual _drone) distance (getPosASLVisual (vehicle _target)) } else { _dist };
+// Low-altitude near-target = ground-strike terminal contact (drone impacted and Crocus fired its own explosion)
+private _lowAlt        = _droneAlive && { ((getPosASL _drone select 2) - (getTerrainHeightASL (getPosASL _drone)) < _minRecoveryAlt) };
+private _closeEnough   = (_dist <= (_minDistanceToTarget + 2.5)) || (_targetActualDist <= (_minDistanceToTarget + 2.5)) || (!_droneAlive && {_dist < 15}) || (_lowAlt && {_dist < 15});
 
 diag_log format ["CLDW [GuidanceExit]: '%1' targeting '%2' — closeEnough:%3 targetDied:%4 losLost:%5 outOfRange:%6 lowAlt:%7 dist:%8m.",
     typeOf _drone, typeOf _target, _closeEnough, _targetDied, _losLost, _outOfRange, _lowAlt, round _dist];
@@ -621,69 +628,93 @@ diag_log format ["CLDW [GuidanceExit]: '%1' targeting '%2' — closeEnough:%3 ta
 if (_closeEnough) then {
     // Normal terminal impact - drone mod handles its own explosion and deletion
     diag_log format ["CLDW [Impact]: '%1' terminal contact with '%2' at %3m (AP: %4).", typeOf _drone, typeOf _target, round _dist, _AP];
-    _drone setFuel 0;
 
-    // Tag victim for Antistasi / RIS scoring
+    // CRASH FIX: Snapshot operator and near-units BEFORE any detonation call.
+    // setDamage 1 / setFuel 0 trigger the KVN/Crocus mod's Killed EH synchronously,
+    // which kills and ragdolls _target in the same script tick. Calling nearestObjects
+    // or setVariable on a ragdolling object causes ACCESS_VIOLATION (mov rax, [rdx]).
     private _operator = _drone getVariable ["CLDW_CurrentOperator", objNull];
+    private _impactSide = if (!isNull _operator) then { side group _operator } else { sideUnknown };
+    // Snapshot alive near-units while _target is still a valid live entity
+    private _nearUnits = if (!isNull _operator && { alive _target }) then {
+        nearestObjects [_target, ["CAManBase"], 15]
+    } else { [] };
+
+    // Tag victims NOW, before detonation destroys/ragdolls them
     if (!isNull _operator) then {
-        _target setVariable ["CLDW_LastDroneAttacker", _operator, true];
-        _target setVariable ["CLDW_LastDroneAttackerTime", time, true];
-        _target setVariable ["CLDW_LastDroneAttackerSide", side group _operator, true];
-        
-        private _nearUnits = nearestObjects [_target, ["CAManBase"], 15];
+        if (alive _target) then {
+            _target setVariable ["CLDW_LastDroneAttacker", _operator, true];
+            _target setVariable ["CLDW_LastDroneAttackerTime", time, true];
+            _target setVariable ["CLDW_LastDroneAttackerSide", _impactSide, true];
+        };
         {
-            _x setVariable ["CLDW_LastDroneAttacker", _operator, true];
-            _x setVariable ["CLDW_LastDroneAttackerTime", time, true];
-            _x setVariable ["CLDW_LastDroneAttackerSide", side group _operator, true];
+            if (alive _x) then {
+                _x setVariable ["CLDW_LastDroneAttacker", _operator, true];
+                _x setVariable ["CLDW_LastDroneAttackerTime", time, true];
+                _x setVariable ["CLDW_LastDroneAttackerSide", _impactSide, true];
+            };
         } forEach _nearUnits;
     };
 
-    // If drone is still alive after contacting the target, trigger fatal damage so its native mod handler fires
-    if (alive _drone) then {
-        _drone setDamage 1;
+    // Pure Physics Handoff:
+    // Impart final forward velocity vector directly toward target at impact speed.
+    // Do NOT call setDamage 1, setFuel 0, or deleteVehicle — the base drone mod's native
+    // collision & detonation script handles the physical contact and explosion cleanly.
+    if (!isNull _target && {alive _target} && {alive _drone}) then {
+        private _dir = (getPosASLVisual _target) vectorDiff (getPosASLVisual _drone);
+        private _strikeSpeed = ((missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6) max 40;
+        _drone setVelocity ((vectorNormalized _dir) vectorMultiply _strikeSpeed);
     };
 
 } else {
+    // SAFETY: all fallback paths require a living, local-authority drone.
+    // Accessing driver/owner on a dead or non-local drone crashes the dedi server.
+    if (isNull _drone) exitWith {};
+
     if (_targetDied && {_lowAlt}) then {
-        // Target died while drone was in unrecoverable low altitude dive
-        _drone setFuel 0;
+        // Target died while drone was in unrecoverable low altitude dive.
+        // Drone likely impacted the ground; Crocus fires its own native explosion — do NOT call setDamage again.
         private _operator = _drone getVariable ["CLDW_CurrentOperator", objNull];
         if (!isNull _operator) then {
-            private _nearUnits = nearestObjects [_drone, ["CAManBase"], 15];
+            private _impactSide = side group _operator;
+            // Use drone position for spatial query — target is already dead here
+            private _nearUnits = if (alive _drone) then { nearestObjects [_drone, ["CAManBase"], 15] } else { [] };
             {
-                _x setVariable ["CLDW_LastDroneAttacker", _operator, true];
-                _x setVariable ["CLDW_LastDroneAttackerTime", time, true];
-                _x setVariable ["CLDW_LastDroneAttackerSide", side group _operator, true];
+                if (alive _x) then {
+                    _x setVariable ["CLDW_LastDroneAttacker", _operator, true];
+                    _x setVariable ["CLDW_LastDroneAttackerTime", time, true];
+                    _x setVariable ["CLDW_LastDroneAttackerSide", _impactSide, true];
+                };
             } forEach _nearUnits;
         };
 
+        // Maintain downward velocity vector into the ground; base mod detonates on ground collision
         if (alive _drone) then {
-            _drone setDamage 1;
+            private _curVel = velocity _drone;
+            _drone setVelocity [_curVel select 0, _curVel select 1, (_curVel select 2) min -20];
         };
     } else {
         if (_outOfRange || _targetDied) then {
             // Target dead or out of range: disengage cleanly
             if (alive _drone && {!isNull _man}) then {
                 _drone enableAI "PATH";
-                if (!isNull (driver _drone)) then {
-                    (driver _drone) enableAI "PATH";
-                };
+                private _drv = driver _drone;
+                if (!isNull _drv && {alive _drv}) then { _drv enableAI "PATH"; };
                 _drone setVariable ["CLDW_Disengaged", true, true];
                 [_drone, _lastValidTargetPos, _man] spawn CLDW_fnc_disengage;
             } else {
-                _drone setFuel 0;
+                if (alive _drone) then { _drone setFuel 0; };
             };
         } else {
             // Lost sight: pull up to search altitude and re-acquire
             if (alive _drone && {!isNull _man}) then {
                 _drone enableAI "PATH";
-                if (!isNull (driver _drone)) then {
-                    (driver _drone) enableAI "PATH";
-                };
+                private _drv = driver _drone;
+                if (!isNull _drv && {alive _drv}) then { _drv enableAI "PATH"; };
                 _drone setVariable ["CLDW_Disengaged", false, true];
                 _drone setVariable ["CLDW_CurrentTarget", objNull, true];
                 _drone flyInHeight 40;
-                (driver _drone) doMove (ASLToAGL _lastValidTargetPos);
+                if (!isNull _drv && {alive _drv}) then { _drv doMove (ASLToAGL _lastValidTargetPos); };
                 
                 [_drone, _man, _lastValidTargetPos] spawn {
                     params ["_drone", "_man", "_lastPos"];

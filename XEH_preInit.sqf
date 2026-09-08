@@ -344,3 +344,8 @@ if (isClass (configFile >> "CfgMagazines" >> "1Rnd_RC40_HE_shell_RF")) then {
 		1
 	] call CBA_fnc_addSetting;
 };
+
+if (isServer) then {
+	CLDW_activeDrones = [];
+	CLDW_deployQueue = [];
+};

@@ -6,6 +6,9 @@ addMissionEventHandler ["EntityCreated", {
     
     private _type = typeOf _entity;
     if (_entity isKindOf "UAV" || {_entity isKindOf "Air"}) then {
+        // Suppress ACE marking laser checks on turretless FPV drones immediately upon creation
+        _entity setVariable ["ace_markinglaser_hasLaser", false];
+
         // Exclude Shahed and any drone spawned near a swarm launcher crate (which handles its own launch physics)
         private _lowerType = toLower _type;
         private _isExtendedUAV = (_lowerType find "crocus" > -1) || 
@@ -22,8 +25,8 @@ addMissionEventHandler ["EntityCreated", {
             private _nearLaunchers = nearestObjects [_entity, ["CLDWC_DroneCrate_Swarm"], 15];
             if (count _nearLaunchers > 0) exitWith {};
 
-            // Disable physical collision with all other UAVs to prevent mid-air drone collisions and explosions
-            private _otherUAVs = vehicles select { alive _x && { _x != _entity } && { _x isKindOf "UAV" || _x isKindOf "Air" } };
+            // Disable physical collision with all other active UAVs safely
+            private _otherUAVs = (+CLDW_activeDrones) select { !isNull _x && {alive _x} && {_x != _entity} };
             {
                 _entity disableCollisionWith _x;
                 _x disableCollisionWith _entity;
@@ -83,6 +86,7 @@ addMissionEventHandler ["EntityCreated", {
                 sleep 0.1; // Wait 1 frame to detect ownership variables
                 if (isNull _drone) exitWith {};
                 if (!local _drone) exitWith {}; // Locality may have transferred during sleep; skip if drone is no longer local
+                if (_drone getVariable ["CLDW_AI_Spawned", false]) exitWith {};
                 
                 // Exclude player-owned, player-assembled, and Zeus-placed drones from crew realignment
                 if (!isNull findDisplay 312 || {count (allPlayers select { _x distance _drone < 10 }) > 0}) exitWith {};
@@ -113,8 +117,8 @@ addMissionEventHandler ["EntityCreated", {
                     };
                 };
                 if (_isPlayerOwned) exitWith {};
-                
-                if (!(_drone getVariable ["CLDW_AI_Spawned", false]) && {isNull _owner}) exitWith {};
+                if (_drone getVariable ["CLDW_AI_Spawned", false]) exitWith {};
+                if (isNull _owner) exitWith {};
                 
                 private _timeout = time + 3.0;
                 waitUntil {
@@ -280,6 +284,169 @@ addMissionEventHandler ["EntityCreated", {
 
     // Inventory assignment, AI spawning, and guidance must have one authority in multiplayer.
     if (!isServer) exitWith { true };
+
+    if (isNil "CLDW_activeDrones") then { CLDW_activeDrones = []; };
+    if (isNil "CLDW_deployQueue") then { CLDW_deployQueue = []; };
+
+    // Server-side throttled deployment worker:
+    // Processes deployment requests sequentially with a minimum 0.35s delay between UAV instantiations.
+    // Prevents network message table overflow and engine race conditions when multiple squads deploy simultaneously.
+    if (isNil "CLDW_deployWorkerRunning") then {
+        CLDW_deployWorkerRunning = true;
+        [] spawn {
+            while {true} do {
+                waitUntil { sleep 0.05; count CLDW_deployQueue > 0 };
+                private _req = CLDW_deployQueue deleteAt 0;
+                _req params ["_operator", "_droneBackpack", "_groupSide"];
+                if (!isNull _operator) then {
+                    _operator setVariable ["CLDW_Drone_Queued", false];
+                };
+
+                if (!isNull _operator && {alive _operator} && {backpack _operator == _droneBackpack}) then {
+                    private _droneClass = getText (configFile >> "CfgVehicles" >> _droneBackpack >> "assembleInfo" >> "assembleTo");
+                    if (_droneClass == "") then {
+                        _droneClass = _droneBackpack;
+                        private _bagIndex = _droneBackpack find "_Bag";
+                        if (_bagIndex != -1) then {
+                            _droneClass = _droneBackpack select [0, _bagIndex];
+                        } else {
+                            private _bpIndex = _droneBackpack find "_backpack_F";
+                            if (_bpIndex != -1) then {
+                                _droneClass = (_droneBackpack select [0, _bpIndex]) + "_F";
+                            };
+                        };
+                    };
+
+                    if (isClass (configFile >> "CfgVehicles" >> _droneClass)) then {
+                        private _spawnPos = getPosATL _operator;
+                        private _spawnPosFinal = if (missionNamespace getVariable ["CLDW_Setting_SpawnInAir", false]) then {
+                            [_spawnPos select 0, _spawnPos select 1, 100]
+                        } else {
+                            _spawnPos vectorAdd [(sin (getDir _operator)) * 1.5, (cos (getDir _operator)) * 1.5, 1.5]
+                        };
+                        private _drone = createVehicle [_droneClass, _spawnPosFinal, [], 0, "FLY"];
+
+                        if (!isNull _drone) then {
+                            // Suppress ACE marking laser checks on turretless FPV drones during spawn
+                            _drone setVariable ["ace_markinglaser_hasLaser", false];
+
+                            diag_log format ["CLDW [Deploy]: '%1' deployed '%2' at %3 (machine %4).", name _operator, _droneClass, mapGridPosition _drone, clientOwner];
+                            _drone setVariable ["CLDW_AI_Spawned", true, true];
+                            _drone setVariable ["CLDW_CurrentOperator", _operator, true];
+                            _drone setVariable ["CLDW_OperatorGroup", group _operator, true];
+                            _drone setVariable ["ddtOwner", _operator, true];
+
+                            // Track in thread-safe active drones list
+                            CLDW_activeDrones pushBack _drone;
+
+                            createVehicleCrew _drone;
+                            removeBackpack _operator;
+                            if (isPlayer _operator) then {
+                                _operator connectTerminalToUAV _drone;
+                            };
+
+                            private _crew = crew _drone;
+                            { 
+                                _x setVariable ["CLDW_IsDroneCrew", true, true]; 
+                                _x setVariable ["USED", true, true];
+                                _x setVariable ["A3A_isIrrelevant", true, true];
+                                if (_x in switchableUnits) then { removeSwitchableUnit _x; };
+                            } forEach _crew;
+
+                            private _opGrp = group _operator;
+                            private _separateGrp = createGroup [_groupSide, true];
+                            _crew joinSilent _separateGrp;
+                            _separateGrp deleteGroupWhenEmpty true;
+                            _separateGrp setBehaviour "CARELESS";
+                            _separateGrp setCombatMode "BLUE";
+
+                            // If a Headless Client is connected, offload the drone's group simulation to the HC.
+                            private _hcList = entities "HeadlessClient_F";
+                            if (count _hcList > 0) then {
+                                private _targetOwner = owner (_hcList select 0);
+                                if (_targetOwner > 2) then {
+                                    diag_log format ["CLDW [Locality]: Offloading '%1' group to Headless Client (machine %2).", typeOf _drone, _targetOwner];
+                                    _separateGrp setGroupOwner _targetOwner;
+                                };
+                            };
+
+                            if (missionNamespace getVariable ["CLDW_Setting_GiveAITerminal", true]) then {
+                                private _terminalClass = switch (_groupSide) do {
+                                    case west:  { "B_UavTerminal" };
+                                    case east:  { "O_UavTerminal" };
+                                    default     { "I_UavTerminal" };
+                                };
+                                if !(_terminalClass in (assignedItems _operator)) then {
+                                    _operator linkItem _terminalClass;
+                                };
+                            };
+
+                            (group _operator) setCombatMode "RED";
+                            (group _operator) setBehaviour "COMBAT";
+
+                            // Disable collisions with all other active UAVs immediately
+                            private _otherActive = (+CLDW_activeDrones) select { !isNull _x && {alive _x} };
+                            {
+                                if (_x != _drone) then {
+                                    _drone disableCollisionWith _x;
+                                    _x disableCollisionWith _drone;
+                                };
+                            } forEach _otherActive;
+
+                            private _uavType = toLower (typeOf _drone);
+                            private _isSuicide = ((_uavType find "crocus" > -1) || 
+                                                 {_uavType find "kvn" > -1} || 
+                                                 {_uavType find "uafpv" > -1} || 
+                                                 {_uavType find "rc40_he" > -1} ||
+                                                 {_uavType find "rc-40_he" > -1} ||
+                                                 {_uavType find "fpv" > -1}) &&
+                                                 {!(_uavType find "uav_01" > -1)} &&
+                                                 {!(_uavType find "darter" > -1)} &&
+                                                 {!(_uavType find "tayran" > -1)} &&
+                                                 {!(_uavType find "uav_06" > -1)} &&
+                                                 {!(_uavType find "uas_06" > -1)} &&
+                                                 {!(_uavType find "al6" > -1)} &&
+                                                 {!(_uavType find "al-6" > -1)} &&
+                                                 {!(_uavType find "sensor" > -1)} &&
+                                                 {!(_uavType find "smoke" > -1)} &&
+                                                 {!(_uavType find "recon" > -1)} &&
+                                                 {!(_uavType find "mavic" > -1)} &&
+                                                 {!(_uavType find "blackhornet" > -1)} &&
+                                                 {!(_uavType find "ied" > -1)};
+
+                            if (_isSuicide) then {
+                                private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
+                                if (count _targets > 0) then {
+                                    private _target = _targets select 0;
+                                    private _speed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6;
+                                    _drone setVariable ["CLDW_Disengaged", false, true];
+                                    _drone setVariable ["CLDW_CurrentTarget", _target, true];
+                                    [_drone, _target, _speed, 0.1] spawn CLDW_fnc_guideToTarget;
+                                } else {
+                                    [_drone, getPosATL _operator] call CLDW_fnc_move;
+                                };
+                            } else {
+                                if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf") then {
+                                    [_drone, _operator] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
+                                } else {
+                                    [_drone, getPosATL _operator] call CLDW_fnc_move;
+                                };
+                            };
+
+                            if (missionNamespace getVariable ["ddtDebug", false]) then {
+                                systemChat format ["CLDW: AI %1 deployed drone %2 in combat.", name _operator, typeOf _drone];
+                            };
+                        };
+                    };
+                    if (!isNull _operator) then {
+                        _operator setVariable ["CLDW_Drone_Deploying", false];
+                    };
+                    // Throttle AI deployments through a server-side queue with a minimum 0.25-second delay between UAV instantiations
+                    sleep 0.25;
+                };
+            };
+        };
+    };
 
     sleep 2; 
     private _isFirstRun = true;
@@ -613,7 +780,7 @@ addMissionEventHandler ["EntityCreated", {
                     };  
 
                     // Combat assembly monitor for AI operators carrying drone backpacks
-                    private _allActiveDrones = vehicles select { alive _x && { _x isKindOf "UAV" || _x isKindOf "Air" } };
+                    private _allActiveDrones = (+CLDW_activeDrones) select { !isNull _x && {alive _x} };
                     {
                         private _op = _x;
                         private _bp = backpack _op;
@@ -663,136 +830,10 @@ addMissionEventHandler ["EntityCreated", {
                                     _group setVariable ["CLDW_Group_Last_Launch", time]; // Server-local, no broadcast needed
                                     _op setVariable ["CLDW_Drone_Deploying", true];
                                     _op setVariable ["CLDW_Last_Drone_Deploy_Time", time, true];
-                                    [_op, _bp, _groupSide] spawn {
-                                    params ["_operator", "_droneBackpack", "_groupSide"];
-                                    sleep (1 + random 3);
-                                    if (isNull _operator || {!alive _operator} || {backpack _operator != _droneBackpack}) exitWith {
-                                        _operator setVariable ["CLDW_Drone_Deploying", false];
+                                    if (!(_op getVariable ["CLDW_Drone_Queued", false])) then {
+                                        _op setVariable ["CLDW_Drone_Queued", true];
+                                        CLDW_deployQueue pushBack [_op, _bp, _groupSide];
                                     };
-                                    
-                                    private _droneClass = getText (configFile >> "CfgVehicles" >> _droneBackpack >> "assembleInfo" >> "assembleTo");
-                                    if (_droneClass == "") then {
-                                        _droneClass = _droneBackpack;
-                                        private _bagIndex = _droneBackpack find "_Bag";
-                                        if (_bagIndex != -1) then {
-                                            _droneClass = _droneBackpack select [0, _bagIndex];
-                                        } else {
-                                            private _bpIndex = _droneBackpack find "_backpack_F";
-                                            if (_bpIndex != -1) then {
-                                                _droneClass = (_droneBackpack select [0, _bpIndex]) + "_F";
-                                            };
-                                        };
-                                    };
-
-                                    if (!isClass (configFile >> "CfgVehicles" >> _droneClass)) exitWith {
-                                        diag_log format ["CLDW: Cannot deploy backpack %1 because vehicle class %2 does not exist.", _droneBackpack, _droneClass];
-                                        _operator setVariable ["CLDW_Drone_Deploying", false];
-                                    };
-                                    
-                                    private _spawnPos = getPosATL _operator;
-                                    private _spawnPosFinal = if (missionNamespace getVariable ["CLDW_Setting_SpawnInAir", false]) then {
-                                        [_spawnPos select 0, _spawnPos select 1, 100]
-                                    } else {
-                                        _spawnPos vectorAdd [(sin (getDir _operator)) * 1.5, (cos (getDir _operator)) * 1.5, 1.5]
-                                    };
-                                    private _drone = createVehicle [_droneClass, _spawnPosFinal, [], 0, "FLY"];
-                                    
-                                    if (!isNull _drone) then {
-                                        diag_log format ["CLDW [Deploy]: '%1' deployed '%2' at %3 (machine %4).", name _operator, _droneClass, mapGridPosition _drone, clientOwner];
-                                        _drone setVariable ["CLDW_AI_Spawned", true, true];
-                                        _drone setVariable ["CLDW_CurrentOperator", _operator, true];
-                                        _drone setVariable ["CLDW_OperatorGroup", group _operator, true];
-                                        _drone setVariable ["ddtOwner", _operator, true];
-                                        _drone setVariable ["ddtOwner", str _operator, true];
-                                        createVehicleCrew _drone;
-                                        removeBackpack _operator;
-                                        _operator connectTerminalToUAV _drone;
-
-                                        private _crew = crew _drone;
-                                        { 
-                                            _x setVariable ["CLDW_IsDroneCrew", true, true]; 
-                                            _x setVariable ["USED", true, true];
-                                            if (_x in switchableUnits) then { removeSwitchableUnit _x; };
-                                        } forEach _crew;
-
-                                        private _opGrp = group _operator;
-                                        private _separateGrp = createGroup [_groupSide, true];
-                                        _crew joinSilent _separateGrp;
-                                        _separateGrp deleteGroupWhenEmpty true;
-                                        _separateGrp setBehaviour "CARELESS";
-                                        _separateGrp setCombatMode "BLUE";
-
-                                        if (isDedicated || isServer) then {
-                                            // Prefer the Headless Client as the authority machine if one is connected.
-                                            // Hardcoding machine 2 crashes vanilla dedi servers that have no HC (machine 2 does not exist).
-                                            private _hcList = entities "HeadlessClient_F";
-                                            private _targetOwner = if (count _hcList > 0) then { owner (_hcList select 0) } else { 0 };
-                                            diag_log format ["CLDW [Locality]: Transferring '%1' to machine %2 (HC present: %3).", typeOf _drone, _targetOwner, count _hcList > 0];
-                                            (group _drone) setGroupOwner _targetOwner;
-                                            _separateGrp setGroupOwner _targetOwner;
-                                        };
-
-                                        if (missionNamespace getVariable ["CLDW_Setting_GiveAITerminal", true]) then {
-                                            private _terminalClass = switch (_groupSide) do {
-                                                case west:  { "B_UavTerminal" };
-                                                case east:  { "O_UavTerminal" };
-                                                default     { "I_UavTerminal" };
-                                            };
-                                            if !(_terminalClass in (assignedItems _operator)) then {
-                                                _operator linkItem _terminalClass;
-                                            };
-                                        };
-
-                                        (group _operator) setCombatMode "RED";
-                                        (group _operator) setBehaviour "COMBAT";
-
-                                        private _uavType = toLower (typeOf _drone);
-                                        private _isSuicide = ((_uavType find "crocus" > -1) || 
-                                                             {_uavType find "kvn" > -1} || 
-                                                             {_uavType find "uafpv" > -1} || 
-                                                             {_uavType find "rc40_he" > -1} ||
-                                                             {_uavType find "rc-40_he" > -1} ||
-                                                             {_uavType find "fpv" > -1}) &&
-                                                             {!(_uavType find "uav_01" > -1)} &&
-                                                             {!(_uavType find "darter" > -1)} &&
-                                                             {!(_uavType find "tayran" > -1)} &&
-                                                             {!(_uavType find "uav_06" > -1)} &&
-                                                             {!(_uavType find "uas_06" > -1)} &&
-                                                             {!(_uavType find "al6" > -1)} &&
-                                                             {!(_uavType find "al-6" > -1)} &&
-                                                             {!(_uavType find "sensor" > -1)} &&
-                                                             {!(_uavType find "smoke" > -1)} &&
-                                                             {!(_uavType find "recon" > -1)} &&
-                                                             {!(_uavType find "mavic" > -1)} &&
-                                                             {!(_uavType find "blackhornet" > -1)} &&
-                                                             {!(_uavType find "ied" > -1)};
-                                        if (_isSuicide) then {
-                                            private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
-                                            if (count _targets > 0) then {
-                                                private _target = _targets select 0;
-                                                private _speed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6;
-                                                _drone setVariable ["CLDW_Disengaged", false, true];
-                                                _drone setVariable ["CLDW_CurrentTarget", _target, true];
-                                                [_drone, _target, _speed, 0.1] spawn CLDW_fnc_guideToTarget;
-                                            } else {
-                                                if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf") then {
-                                                    [_drone, _operator] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
-                                                } else {
-                                                    [_drone, getPosATL _operator] call CLDW_fnc_move;
-                                                };
-                                            };
-                                        } else {
-                                            if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf") then {
-                                                [_drone, _operator] execVM "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf";
-                                            };
-                                        };
-
-                                        if (missionNamespace getVariable ["ddtDebug", false]) then {
-                                            systemChat format ["CLDW: AI %1 deployed drone %2 in combat.", name _operator, typeOf _drone];
-                                        };
-                                    };
-                                    _operator setVariable ["CLDW_Drone_Deploying", false];
-                                }; // end spawn
                                 }; // end stagger gate
                             }; // end _inCombat
                         };
@@ -800,92 +841,105 @@ addMissionEventHandler ["EntityCreated", {
                 }; 
             } forEach allGroups; 
             
-            // Re-engagement monitor for disengaged/idle drones (supports RC-40, Crocus, UAFPV, KVN, etc.)
-            {
-                private _drone = _x;
-                if (alive _drone && {!(_drone getVariable ["CLDW_Disengaged", false])}) then {
-                    private _man = _drone getVariable ["CLDW_CurrentOperator", objNull];
-                    if (isNull _man || {!alive _man}) then {
-                        private _ownerVar = _drone getVariable ["ddtOwner", objNull];
-                        if (_ownerVar isEqualType objNull && {!isNull _ownerVar}) then {
-                            _man = _ownerVar;
-                        } else {
-                            if (_ownerVar isEqualType "" && {_ownerVar != ""}) then {
-                                { if (str _x == _ownerVar) exitWith { _man = _x; }; } forEach allUnits;
-                            };
-                        };
-                        if (isNull _man || {!alive _man}) then {
-                            private _droneSide = side _drone;
-                            private _nearUnits = (getPosATL _drone) nearEntities ["CAManBase", 60];
-                            private _friendlyUnits = _nearUnits select { alive _x && {side (group _x) == _droneSide || [side (group _x), _droneSide] call BIS_fnc_areFriendly} && {!isPlayer _x} };
-                            if (count _friendlyUnits > 0) then {
-                                _man = _friendlyUnits select 0;
-                            };
-                        };
-                        if (!isNull _man) then {
-                            _drone setVariable ["CLDW_CurrentOperator", _man, true];
-                            _drone setVariable ["ddtOwner", _man, true];
-                        };
+            // Re-engagement monitor for disengaged/idle drones using thread-safe cloned array
+            private _active = +CLDW_activeDrones;
+            for "_i" from (count _active - 1) to 0 step -1 do {
+                private _uav = _active select _i;
+                if (isNull _uav || {!alive _uav}) then {
+                    private _idx = CLDW_activeDrones find _uav;
+                    if (_idx != -1) then {
+                        CLDW_activeDrones deleteAt _idx;
                     };
-                    
-                    if (!isNull _man && {alive _man}) then {
-                        private _uavType = toLower (typeOf _drone);
-                        private _isSuicide = ((_uavType find "crocus" > -1) || 
-                                             {_uavType find "kvn" > -1} || 
-                                             {_uavType find "uafpv" > -1} || 
-                                             {_uavType find "rc40_he" > -1} ||
-                                             {_uavType find "rc-40_he" > -1} ||
-                                             {_uavType find "fpv" > -1}) &&
-                                             {!(_uavType find "uav_01" > -1)} &&
-                                             {!(_uavType find "darter" > -1)} &&
-                                             {!(_uavType find "tayran" > -1)} &&
-                                             {!(_uavType find "uav_06" > -1)} &&
-                                             {!(_uavType find "uas_06" > -1)} &&
-                                             {!(_uavType find "al6" > -1)} &&
-                                             {!(_uavType find "al-6" > -1)} &&
-                                             {!(_uavType find "sensor" > -1)} &&
-                                             {!(_uavType find "smoke" > -1)} &&
-                                             {!(_uavType find "recon" > -1)} &&
-                                             {!(_uavType find "mavic" > -1)} &&
-                                             {!(_uavType find "blackhornet" > -1)} &&
-                                             {!(_uavType find "ied" > -1)};
+                } else {
+                    private _drone = _uav;
+                    if (!(_drone getVariable ["CLDW_Disengaged", false])) then {
+                        private _man = _drone getVariable ["CLDW_CurrentOperator", objNull];
+                        if (isNull _man || {!alive _man}) then {
+                            private _ownerVar = _drone getVariable ["ddtOwner", objNull];
+                            if (_ownerVar isEqualType objNull && {!isNull _ownerVar}) then {
+                                _man = _ownerVar;
+                            } else {
+                                if (_ownerVar isEqualType "" && {_ownerVar != ""}) then {
+                                    { if (str _x == _ownerVar) exitWith { _man = _x; }; } forEach allUnits;
+                                };
+                            };
+                            if (isNull _man || {!alive _man}) then {
+                                private _droneSide = side _drone;
+                                private _nearUnits = (getPosATL _drone) nearEntities ["CAManBase", 60];
+                                private _friendlyUnits = _nearUnits select { alive _x && {side (group _x) == _droneSide || [side (group _x), _droneSide] call BIS_fnc_areFriendly} && {!isPlayer _x} };
+                                if (count _friendlyUnits > 0) then {
+                                    _man = _friendlyUnits select 0;
+                                };
+                            };
+                            if (!isNull _man) then {
+                                _drone setVariable ["CLDW_CurrentOperator", _man, true];
+                                _drone setVariable ["ddtOwner", _man, true];
+                            };
+                        };
                         
-                        if (_isSuicide) then {
-                            private _currentTarget = _drone getVariable ["CLDW_CurrentTarget", objNull];
-                            if (isNull _currentTarget || {!alive _currentTarget}) then {
-                                // Check for targets within the configured engagement range.
-                                private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
-                                if (count _targets > 0) then {
-                                    private _target = _targets select 0;
-                                    private _speed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6;
-                                    _drone setVariable ["CLDW_Disengaged", false, true];
-                                    _drone setVariable ["CLDW_CurrentTarget", _target, true];
-                                    if (missionNamespace getVariable ["ddtDebug", false]) then {
-                                        systemChat format ["CLDW: Drone %1 engaging target %2 from %3m!", typeOf _drone, typeOf _target, round (_drone distance _target)];
-                                    };
-                                    [_drone, _target, _speed, 0.1] spawn CLDW_fnc_guideToTarget;
-                                } else {
-                                    // Actively follow operator/squad in formation loiter so drone does not freeze/hover aimlessly
-                                    if (_drone distance _man > 30) then {
-                                        [_drone, getPosATL _man] call CLDW_fnc_move;
+                        if (!isNull _man && {alive _man}) then {
+                            private _uavType = toLower (typeOf _drone);
+                            private _isSuicide = ((_uavType find "crocus" > -1) || 
+                                                 {_uavType find "kvn" > -1} || 
+                                                 {_uavType find "uafpv" > -1} || 
+                                                 {_uavType find "rc40_he" > -1} ||
+                                                 {_uavType find "rc-40_he" > -1} ||
+                                                 {_uavType find "fpv" > -1}) &&
+                                                 {!(_uavType find "uav_01" > -1)} &&
+                                                 {!(_uavType find "darter" > -1)} &&
+                                                 {!(_uavType find "tayran" > -1)} &&
+                                                 {!(_uavType find "uav_06" > -1)} &&
+                                                 {!(_uavType find "uas_06" > -1)} &&
+                                                 {!(_uavType find "al6" > -1)} &&
+                                                 {!(_uavType find "al-6" > -1)} &&
+                                                 {!(_uavType find "sensor" > -1)} &&
+                                                 {!(_uavType find "smoke" > -1)} &&
+                                                 {!(_uavType find "recon" > -1)} &&
+                                                 {!(_uavType find "mavic" > -1)} &&
+                                                 {!(_uavType find "blackhornet" > -1)} &&
+                                                 {!(_uavType find "ied" > -1)};
+                            
+                            if (_isSuicide) then {
+                                private _currentTarget = _drone getVariable ["CLDW_CurrentTarget", objNull];
+                                if (isNull _currentTarget || {!alive _currentTarget}) then {
+                                    // Check for targets within the configured engagement range.
+                                    private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
+                                    if (count _targets > 0) then {
+                                        private _target = _targets select 0;
+                                        private _speed = (missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6;
+                                        _drone setVariable ["CLDW_Disengaged", false, true];
+                                        _drone setVariable ["CLDW_CurrentTarget", _target, true];
+                                        if (missionNamespace getVariable ["ddtDebug", false]) then {
+                                            systemChat format ["CLDW: Drone %1 engaging target %2 from %3m!", typeOf _drone, typeOf _target, round (_drone distance _target)];
+                                        };
+                                        [_drone, _target, _speed, 0.1] spawn CLDW_fnc_guideToTarget;
+                                    } else {
+                                        // Actively follow operator/squad in formation loiter so drone does not freeze/hover aimlessly
+                                        if (_drone distance _man > 30) then {
+                                            [_drone, getPosATL _man] call CLDW_fnc_move;
+                                        };
                                     };
                                 };
                             };
                         };
                     };
                 };
-            } forEach (vehicles select { _x isKindOf "UAV" || _x isKindOf "Air" });
+            };
 
             // Periodically disable collisions between all friendly UAVs so swarms never collide mid-air
-            private _allActiveUAVs = vehicles select { alive _x && { _x isKindOf "UAV" } };
+            private _allActiveUAVs = (+CLDW_activeDrones) select { !isNull _x && {alive _x} };
             private _uavCount = count _allActiveUAVs;
             if (_uavCount > 1) then {
                 for "_i" from 0 to (_uavCount - 2) do {
                     private _uavA = _allActiveUAVs select _i;
-                    for "_j" from (_i + 1) to (_uavCount - 1) do {
-                        private _uavB = _allActiveUAVs select _j;
-                        _uavA disableCollisionWith _uavB;
-                        _uavB disableCollisionWith _uavA;
+                    if (!isNull _uavA && {alive _uavA}) then {
+                        for "_j" from (_i + 1) to (_uavCount - 1) do {
+                            private _uavB = _allActiveUAVs select _j;
+                            if (!isNull _uavB && {alive _uavB}) then {
+                                _uavA disableCollisionWith _uavB;
+                                _uavB disableCollisionWith _uavA;
+                            };
+                        };
                     };
                 };
             };
@@ -911,7 +965,7 @@ addMissionEventHandler ["EntityCreated", {
         // contact and detonation behavior itself is never modified.
         {
             private _drone = _x;
-            if (!alive _drone && {!(_drone getVariable ["CLDW_WreckCleanupScheduled", false])}) then {
+            if (!isNull _drone && {!alive _drone && {!(_drone getVariable ["CLDW_WreckCleanupScheduled", false])}}) then {
                 private _isCLDWDrone = (_drone getVariable ["CLDW_AI_Spawned", false])
                     || {!isNull (_drone getVariable ["CLDW_CurrentOperator", objNull])}
                     || {{ _x getVariable ["CLDW_IsDroneCrew", false] } count (crew _drone) > 0};
@@ -927,7 +981,7 @@ addMissionEventHandler ["EntityCreated", {
                     };
                 };
             };
-        } forEach (vehicles select { _x isKindOf "UAV" || { _x isKindOf "Air" } });
+        } forEach (+CLDW_activeDrones);
 
         private _loopSpeed = missionNamespace getVariable ["CLDW_Setting_LoopSpeed", 10];
         if (_isFirstRun) then { _isFirstRun = false; sleep 1; } else { sleep _loopSpeed; }; 

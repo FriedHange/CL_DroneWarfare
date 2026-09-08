@@ -22,6 +22,14 @@ class Extended_PreInit_EventHandlers {
     };
 };
 
+class Extended_Init_EventHandlers {
+    class Air {
+        class CLDW_SuppressLaser {
+            init = "params ['_veh']; if (_veh isKindOf 'UAV') then { _veh setVariable ['ace_markinglaser_hasLaser', false]; };";
+        };
+    };
+};
+
 class CfgFunctions
 {
     class CLDW
