@@ -48,17 +48,36 @@
   - Newly deployed drones and returning/disengaged drones now actively follow their squad in formation loiter (~35m AGL) rather than freezing stationary in the air.
   - The idle monitor now actively commands drones to stay in formation with moving squads.
 
+### Realistic Flight Profiles & Speed Separation for Dropper Drones
+
+- Separated flight speed and loitering profiles by drone operational role (`SUICIDE` vs `DROPPER` vs `NONCOMBAT`):
+  - **FPV Suicide Drones**: Retain high racing speeds (150 km/h, 41.6 m/s top strike speed; 97.5 km/h cruise) in `FULL` speed mode.
+  - **Dropper / Bomber Drones** (Western Sahara IED drones, Mavic droppers, Drongo's `DRA_UAV_01G`, Baba Yaga, R-18, etc.): Now fly at realistic, calm cruising and loitering speeds (35 km/h, ~9.7 m/s) with `NORMAL` engine speed mode and steady 80m AGL bombing altitude. They no longer dart across the sky like agile FPV quads.
+  - **Non-Combat Utility / Recon Drones** (AL-6 Pelican, AR-2 Darter, Black Hornet, medical/cargo): Cruising speed locked to 38 km/h (~10.5 m/s) in `NORMAL` speed mode at 40m AGL.
+- Added a new CBA setting `CLDW_Setting_DropperSpeed` (default: 35 km/h, configurable from 15 to 80 km/h) under "Flight Profile".
+- Fixed an issue where active bombing runs by dropper drones were interrupted by squad recall logic, preventing oscillation and unnatural speed surges.
+- Overrode Drongo's `DDT_fnc_GuideToTargetBomber` to enforce realistic 35 km/h level-flight bombing runs and eliminated post-drop `forceSpeed -1` / `setSpeedMode "FULL"` throttle bursts.
+
+### Vehicle Pursuit & Terminal Impact Damage Fix
+
+- Fixed an issue where FPV drones chasing moving vehicles lagged behind, detonated prematurely into empty air behind the rear bumper, and dealt zero damage to the vehicle:
+  - **Predictive Intercept Lead for Moving Vehicles**: Lowered the moving vehicle threshold from 80 km/h to 8 km/h and applied exact quadratic time-to-intercept calculations. Drones now lead moving vehicles along their velocity vector right up to contact, rather than reverting to zero-lead aim inside the commit distance.
+  - **Correct 3D Aim Height**: Fixed aim coordinates for vehicles to target the vehicle's true 3D bounding center and upper chassis/engine deck (+0.2m), eliminating the negative height offset that forced drones to dive into the dirt/road beneath or behind the car.
+  - **Terminal Contact Threshold**: Dynamically adjusted the detonation distance for moving vehicles based on their physical bounding box, ensuring guidance continues until the drone penetrates the vehicle's bounding volume rather than exiting 6 metres early in empty air.
+  - **Terrain Proximity Guard Tuning**: Refined the terrain threat guard so drones diving towards low-profile vehicles within 40 metres are not prematurely aborted.
+  - **Vehicle Damage Assurance**: Implemented a damage assurance watcher on terminal contact that guarantees warhead and component damage (engine destruction, tire blowouts, occupant injury/casualty, and hull damage) if the vehicle moves away from the native mod's blast center without taking damage.
+
 ### Fixed Attack Profile Values
 
 The following internal attack values are intentionally hardcoded and are no longer exposed as CBA settings:
 
 | Behaviour | Value |
 | --- | ---: |
-| Fast-vehicle threshold | 80 km/h |
-| Fast-vehicle forward lead | 1 m |
+| Moving-vehicle threshold | 8 km/h |
+| Moving-vehicle forward lead | 1.2 m |
 | Prediction time limit | 2.5 s |
 | Vehicle & Heli dive start distance | 500 m |
-| Vehicle aim-height correction | 0.0 m (clamped >= 0.8m above ground) |
+| Vehicle aim-height correction | +0.2 m (aims at roof/hood/engine deck) |
 | Guidance direction check interval | 50 ms (20 Hz in terminal dive) |
 | Infantry wind-up duration | 3 s |
 | Infantry wind-up distance | 150 m |

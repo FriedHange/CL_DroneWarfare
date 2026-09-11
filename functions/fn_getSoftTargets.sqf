@@ -65,15 +65,52 @@ if (isNull _operator && isNull _uav) exitWith { [] };
 if (isNull _operator) then { _operator = _uav; };
 
 private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000];
-private _range = _maxRangeSetting;
+private _range = if (_rangeInput > 0) then { _rangeInput min _maxRangeSetting } else { _maxRangeSetting };
 
-private _opGrp = if (!isNull _operator && {_operator isKindOf "Man"}) then { group _operator } else { grpNull };
-private _manSide = if (!isNull _opGrp) then { side _opGrp } else { side _operator };
-if (_manSide == sideUnknown && {!isNull _uav}) then {
-    private _uavGrp = group (driver _uav);
-    if (!isNull _uavGrp) then { _manSide = side _uavGrp; } else { _manSide = side _uav; };
+// Determine combat side
+private _droneSide = if (!isNull _uav) then { _uav getVariable ["CLDW_DroneSide", sideUnknown] } else { sideUnknown };
+private _opGrp = if (!isNull _operator && {_operator isKindOf "Man"} && {alive _operator}) then {
+    group _operator
+} else {
+    if (!isNull _uav) then { _uav getVariable ["CLDW_OperatorGroup", grpNull] } else { grpNull }
+};
+
+private _manSide = sideUnknown;
+if (!isNull _opGrp) then {
+    _manSide = side _opGrp;
+};
+if ((_manSide == sideUnknown || {_manSide == civilian}) && {!isNull _operator} && {alive _operator}) then {
+    _manSide = side _operator;
+};
+if ((_manSide == sideUnknown || {_manSide == civilian}) && {_droneSide != sideUnknown} && {_droneSide != civilian}) then {
+    _manSide = _droneSide;
+};
+if ((_manSide == sideUnknown || {_manSide == civilian}) && {!isNull _uav}) then {
+    private _pilot = driver _uav;
+    if (!isNull _pilot && {alive _pilot}) then {
+        private _uavGrp = group _pilot;
+        if (!isNull _uavGrp) then { _manSide = side _uavGrp; } else { _manSide = side _pilot; };
+    } else {
+        private _crew = (crew _uav) select { alive _x };
+        if (count _crew > 0) then {
+            _manSide = side (group (_crew select 0));
+        } else {
+            _manSide = side _uav;
+        };
+    };
+};
+if ((_manSide == sideUnknown || {_manSide == civilian}) && {!isNull _uav}) then {
+    private _cfgSideNum = getNumber (configFile >> "CfgVehicles" >> (typeOf _uav) >> "side");
+    switch (_cfgSideNum) do {
+        case 0: { _manSide = east; };
+        case 1: { _manSide = west; };
+        case 2: { _manSide = independent; };
+    };
 };
 if (_manSide == sideUnknown) then { _manSide = civilian; };
+if (!isNull _uav && {_droneSide == sideUnknown || {_droneSide == civilian}} && {_manSide != civilian}) then {
+    _uav setVariable ["CLDW_DroneSide", _manSide, true];
+};
 
 private _threshold = missionNamespace getVariable ["ddtSoftThreshold", 100];
 
@@ -115,13 +152,13 @@ if (!isNull _uav) then {
     // Vehicles (engines, metal, heat signatures) can be detected within full range
     private _nearVehicles = (getPosATL _uav) nearEntities [["LandVehicle", "Ship", "Air"], _range];
     _candidates append _nearVehicles;
-    // Infantry without prior knowledge can only be spotted visually within direct visual search radius (max 600m)
-    private _nearInfantry = (getPosATL _uav) nearEntities ["CAManBase", 600 min _range];
+    // Infantry detection within configured search range
+    private _nearInfantry = (getPosATL _uav) nearEntities ["CAManBase", _range];
     _candidates append _nearInfantry;
 } else {
     if (!isNull _operator && {_operator isKindOf "Man"}) then {
         // Ground operator scans vehicles within threat range
-        private _nearVehicles = (getPosATL _operator) nearEntities [["LandVehicle", "Ship", "Air"], _range min 1000];
+        private _nearVehicles = (getPosATL _operator) nearEntities [["LandVehicle", "Ship", "Air"], _range];
         _candidates append _nearVehicles;
     };
 };
@@ -140,17 +177,41 @@ private _out = [];
 {
     private _v = _x;
     if (alive _v) then {
-        private _isDrone = (_v isKindOf "UAV") || {unitIsUAV _v} || {_v getVariable ["CLDW_IsDroneCrew", false]} || {_v getVariable ["USED", false]};
+        private _isDrone = (_v isKindOf "UAV") || {unitIsUAV _v} || {_v getVariable ["CLDW_IsDroneCrew", false]};
         if (!_isDrone && {_v != _uav}) then {
+            private _isInfantry = _v isKindOf "CAManBase";
+            private _isVehicle = (_v isKindOf "LandVehicle") || (_v isKindOf "Ship") || (_v isKindOf "Air") || (_v isKindOf "StaticWeapon");
+
+            // Ignore anything that is neither infantry nor a recognized vehicle type
+            if (!_isInfantry && !_isVehicle) then { continue; };
+
+            private _aliveCrew = if (_isVehicle) then { (crew _v) select { alive _x } } else { [] };
+
+            // Ignore empty/neutral vehicles and static weapon proxies without active crew
+            if (_isVehicle && {count _aliveCrew == 0}) then {
+                private _prioritizeDismounted = missionNamespace getVariable ["CLDW_Setting_PrioritizeDismounted", true];
+                if (_prioritizeDismounted) then {
+                    private _nearDismounted = (getPosATL _v) nearEntities ["CAManBase", 75];
+                    {
+                        private _cand = _x;
+                        if (alive _cand && {!(_cand in _uniqueTargets)}) then {
+                            _uniqueTargets pushBack _cand;
+                        };
+                    } forEach _nearDismounted;
+                };
+                continue; // Strictly NEVER target empty vehicles or unmanned static proxies
+            };
+
+            // Determine target side safely
             private _vSide = sideUnknown;
-            if (_v isKindOf "CAManBase") then {
-                _vSide = side (group _v);
+            if (_isInfantry) then {
+                private _grp = group _v;
+                _vSide = if (!isNull _grp) then { side _grp } else { side _v };
             } else {
-                private _crew = crew _v;
-                if (count _crew > 0) then {
-                    _vSide = side (group (_crew select 0));
-                } else {
-                    _vSide = side _v;
+                if (count _aliveCrew > 0) then {
+                    private _cUnit = _aliveCrew select 0;
+                    private _grp = group _cUnit;
+                    _vSide = if (!isNull _grp) then { side _grp } else { side _cUnit };
                 };
             };
 
@@ -165,26 +226,14 @@ private _out = [];
                 if (_dist <= _range) then {
                     private _isSoftTarget = false;
                     private _prioritizeDismounted = missionNamespace getVariable ["CLDW_Setting_PrioritizeDismounted", true];
-                    if (_v isKindOf "CAManBase") then {
+                    if (_isInfantry) then {
                         _isSoftTarget = true;
                     } else {
-                        private _aliveCrew = (crew _v) select { alive _x };
-                        private _isEmptyVehicle = (count _aliveCrew) == 0;
-                        if (_isEmptyVehicle && _prioritizeDismounted) then {
-                            private _nearDismounted = (getPosATL _v) nearEntities ["CAManBase", 75];
-                            {
-                                private _cand = _x;
-                                if (alive _cand && {!(_cand in _uniqueTargets)}) then {
-                                    _uniqueTargets pushBack _cand;
-                                };
-                            } forEach _nearDismounted;
-                        } else {
-                            private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _v) >> "armor");
-                            private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} || {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} || {_v isKindOf "Air"} || {_armor <= (_threshold max 150)};
-                            private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} || {_v isKindOf "Wheeled_APC_F"};
-                            if (_isSoftVehicle && !_isHeavyArmor) then {
-                                _isSoftTarget = true;
-                            };
+                        private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _v) >> "armor");
+                        private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} || {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} || {_v isKindOf "Air"} || {_armor <= (_threshold max 150)};
+                        private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} || {_v isKindOf "Wheeled_APC_F"};
+                        if (_isSoftVehicle && !_isHeavyArmor) then {
+                            _isSoftTarget = true;
                         };
                     };
 
@@ -223,7 +272,7 @@ private _out = [];
                                                 (!isNull _operator && { _operator knowsAbout _v >= 0.8 });
 
                         private _checkStart = _eyeStart;
-                        if (_isSquadTarget && {!isNull _uav}) then {
+                        if (!isNull _uav) then {
                             // Drone climbs to 70m approach altitude upon launch; evaluate terrain LOS from vantage height
                             private _uavATL = getPosATL _uav;
                             private _climbNeeded = (70 - (_uavATL select 2)) max 0;
@@ -234,24 +283,17 @@ private _out = [];
                         private _losBlocked = terrainIntersectASL [_checkStart, _eyeEnd];
                         if (!_losBlocked) then {
                             private _ignore1 = if (!isNull _uav) then { _uav } else { _operator };
-                            if (_isSquadTarget) then {
-                                private _intersections = lineIntersectsSurfaces [_checkStart, _eyeEnd, _ignore1, _v, true, 1, "VIEW", "GEOM"];
-                                if (count _intersections > 0) then {
-                                    private _hitObj = (_intersections select 0) select 2;
-                                    if (!isNull _hitObj && {_hitObj isKindOf "Building" || _hitObj isKindOf "House" || _hitObj isKindOf "Wall"}) then {
-                                        _losBlocked = true;
-                                    };
-                                };
-                            } else {
-                                // Direct visibility check for ambient unspotted targets
-                                private _vis = [_ignore1, "VIEW", _v] checkVisibility [_eyeStart, _eyeEnd];
-                                if (_vis < 0.2) then {
+                            private _intersections = lineIntersectsSurfaces [_checkStart, _eyeEnd, _ignore1, _v, true, 1, "VIEW", "GEOM"];
+                            if (count _intersections > 0) then {
+                                private _hitObj = (_intersections select 0) select 2;
+                                if (!isNull _hitObj && {_hitObj isKindOf "Building" || _hitObj isKindOf "House" || _hitObj isKindOf "Wall"}) then {
                                     _losBlocked = true;
-                                } else {
-                                    private _intersections = lineIntersectsSurfaces [_eyeStart, _eyeEnd, _ignore1, _v, true, 1, "VIEW", "GEOM"];
-                                    if (count _intersections > 0) then {
-                                        _losBlocked = true;
-                                    };
+                                };
+                            };
+                            if (!_losBlocked && !_isSquadTarget) then {
+                                private _vis = [_ignore1, "VIEW", _v] checkVisibility [_checkStart, _eyeEnd];
+                                if (_vis < 0.05) then {
+                                    _losBlocked = true;
                                 };
                             };
                         };

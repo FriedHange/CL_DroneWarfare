@@ -178,9 +178,18 @@
 [
 	"CLDW_Setting_DroneSpeed",
 	"SLIDER",
-	["Drone Flight Speed (km/h)", "The top speed of the drone in km/h."],
+	["FPV Drone Flight Speed (km/h)", "The top strike speed of FPV suicide drones in km/h."],
 	["CL Drone Warfare", "Flight Profile"],
 	[40, 250, 150, 0],
+	1
+] call CBA_fnc_addSetting;
+
+[
+	"CLDW_Setting_DropperSpeed",
+	"SLIDER",
+	["Dropper Drone Flight Speed (km/h)", "Cruising and loitering speed for munition-dropping bomber drones (e.g. Western Sahara IED drones, Mavic droppers, heavy multirotors). Default is 35 km/h."],
+	["CL Drone Warfare", "Flight Profile"],
+	[15, 80, 35, 0],
 	1
 ] call CBA_fnc_addSetting;
 

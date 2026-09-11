@@ -66,18 +66,46 @@ if (_isTooFar) exitWith {
     _pos
 };
 
-// 1. Cruise Speed Configuration
-private _cruiseSpeed = ((missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6) * 0.65; // Cruise at 65% of configured top speed
+// 1. Cruise Speed Configuration based on Operational Role
+private _role = [_drone] call CLDW_fnc_getDroneRole;
+
+private _cruiseSpeed = switch (_role) do {
+    case "DROPPER": {
+        // Calm, realistic cruising speed for munition-dropping bomber drones (default 35 km/h = ~9.7 m/s)
+        ((missionNamespace getVariable ["CLDW_Setting_DropperSpeed", 35]) / 3.6) min 12
+    };
+    case "NONCOMBAT": {
+        // Calm utility/recon flight speed (approx 38 km/h = ~10.5 m/s)
+        (38 / 3.6)
+    };
+    default { // "SUICIDE"
+        // High-speed FPV cruise (65% of 150 km/h = ~97.5 km/h = 27 m/s)
+        ((missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6) * 0.65
+    };
+};
+
+private _speedMode = if (_role == "SUICIDE") then { "FULL" } else { "NORMAL" };
 
 // 2. Pure Native Vanilla AI Piloting (Zero Script Fighting / Zero Jitter)
 _drone enableAI "PATH";
 _drone enableAI "MOVE";
-_drone setSpeedMode "FULL";
+_drone setSpeedMode _speedMode;
 _drone forceSpeed _cruiseSpeed;
 
-// Maintain cruising altitude smoothly
-private _targetHeight = if (count _pos > 2) then { _pos select 2 } else { 35 };
-if (_targetHeight < 25) then { _targetHeight = 35; };
+// Maintain cruising altitude smoothly based on operational role
+private _targetHeight = if (count _pos > 2 && {(_pos select 2) >= 20}) then {
+    _pos select 2
+} else {
+    switch (_role) do {
+        case "DROPPER": { 80 }; // Bombing/loitering altitude (safe standoff above small arms)
+        case "NONCOMBAT": { 40 }; // Recon/utility altitude
+        default { 35 }; // FPV approach vantage altitude
+    };
+};
+
+if (_role == "DROPPER" && {_targetHeight < 60}) then { _targetHeight = 80; };
+if (_role == "SUICIDE" && {_targetHeight < 25}) then { _targetHeight = 35; };
+
 _drone flyInHeight _targetHeight;
 
 // 3. Update Waypoints with Rate-Limiting
@@ -95,7 +123,7 @@ if ((_pos distance _lastMovePos > 5) || (time - _lastMoveTime > 4.0)) then {
         { deleteWaypoint _x; } forEach (waypoints _grp);
         private _wp = _grp addWaypoint [_pos, 0];
         _wp setWaypointType "MOVE";
-        _wp setWaypointSpeed "FULL";
+        _wp setWaypointSpeed _speedMode;
     };
 
     (driver _drone) doMove _pos;

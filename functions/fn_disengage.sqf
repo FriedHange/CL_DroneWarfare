@@ -40,6 +40,16 @@ if (isNull _man || {!alive _man}) then {
             };
         };
     };
+    if (isNull _man || {!alive _man}) then {
+        private _droneSide = _drone getVariable ["CLDW_DroneSide", side _drone];
+        private _nearUnits = (getPosATL _drone) nearEntities ["CAManBase", 1500];
+        private _friendlyUnits = _nearUnits select { alive _x && {side (group _x) == _droneSide || [side (group _x), _droneSide] call BIS_fnc_areFriendly} && {!isPlayer _x} };
+        if (count _friendlyUnits > 0) then {
+            _man = _friendlyUnits select 0;
+            _drone setVariable ["CLDW_CurrentOperator", _man, true];
+            _drone setVariable ["ddtOwner", _man, true];
+        };
+    };
 };
 
 if (isNull _man || {!alive _man}) exitWith {
@@ -61,10 +71,30 @@ _drone doWatch objNull;
 _grp setBehaviour "CARELESS";
 _grp setCombatMode "BLUE";
 
-private _cruiseSpeed = ((missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6) * 0.65; // Cruise at 65% of configured top speed
-_drone setSpeedMode "FULL";
+private _role = [_drone] call CLDW_fnc_getDroneRole;
+
+private _cruiseSpeed = switch (_role) do {
+    case "DROPPER": {
+        // Calm, realistic speed for munition-dropping bomber drones (default 35 km/h = ~9.7 m/s)
+        ((missionNamespace getVariable ["CLDW_Setting_DropperSpeed", 35]) / 3.6) min 12
+    };
+    case "NONCOMBAT": {
+        (38 / 3.6)
+    };
+    default { // "SUICIDE"
+        ((missionNamespace getVariable ["CLDW_Setting_DroneSpeed", 150]) / 3.6) * 0.65
+    };
+};
+private _speedMode = if (_role == "SUICIDE") then { "FULL" } else { "NORMAL" };
+private _cruiseAlt = switch (_role) do {
+    case "DROPPER": { 80 };
+    case "NONCOMBAT": { 40 };
+    default { 30 };
+};
+
+_drone setSpeedMode _speedMode;
 _drone forceSpeed _cruiseSpeed;
-_drone flyInHeight 30;
+_drone flyInHeight _cruiseAlt;
 
 private _timeout = time + 60;
 
@@ -107,35 +137,14 @@ _drone setVariable ["ddtOwner", str _man, true];
 _drone setVariable ["CLDW_CurrentOperator", _man, true];
 
 // Settle into formation hover above squad
-_drone flyInHeight 30;
+_drone flyInHeight _cruiseAlt;
+_drone setSpeedMode _speedMode;
+_drone forceSpeed _cruiseSpeed;
 (driver _drone) doMove (getPosATL _man);
 
-private _uavType = toLower (typeOf _drone);
-private _isSuicide = ((_uavType find "crocus" > -1) || 
-                     {_uavType find "kvn" > -1} || 
-                     {_uavType find "uafpv" > -1} || 
-                     {_uavType find "rc40_he" > -1} ||
-                     {_uavType find "rc-40_he" > -1} ||
-                     {_uavType find "fpv" > -1}) &&
-                     {!(_uavType find "uav_01" > -1)} &&
-                     {!(_uavType find "darter" > -1)} &&
-                     {!(_uavType find "tayran" > -1)} &&
-                     {!(_uavType find "uav_06" > -1)} &&
-                     {!(_uavType find "uas_06" > -1)} &&
-                     {!(_uavType find "al6" > -1)} &&
-                     {!(_uavType find "al-6" > -1)} &&
-                     {!(_uavType find "sensor" > -1)} &&
-                     {!(_uavType find "smoke" > -1)} &&
-                     {!(_uavType find "recon" > -1)} &&
-                     {!(_uavType find "mavic" > -1)} &&
-                     {!(_uavType find "blackhornet" > -1)} &&
-                     {!(_uavType find "ied" > -1)};
-
-if (_isSuicide) then {
-    if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf") then {
-        [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_FPV.sqf";
-    } else {
-        // Immediate target acquisition on squad rejoin; loiter in formation if clear
+switch (_role) do {
+    case "SUICIDE": {
+        // Immediate target acquisition on squad rejoin for suicide drones; loiter in formation if clear
         private _targets = [_drone, missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000]] call CLDW_fnc_getTargetsAT;
         if (count _targets > 0) then {
             private _target = _targets select 0;
@@ -147,10 +156,24 @@ if (_isSuicide) then {
             [_drone, getPosATL _man] call CLDW_fnc_move;
         };
     };
-} else {
-    if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf") then {
-        [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_Unassigned.sqf";
-    } else {
-        [_drone, getPosATL _man] call CLDW_fnc_move;
+    case "DROPPER": {
+        // Dropper drones return to high-altitude bomber routine or formation
+        _drone setVariable ["CLDW_Disengaged", false, true];
+        _drone flyInHeight 80;
+        if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_Bomber.sqf") then {
+            [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_Bomber.sqf";
+        } else {
+            [_drone, getPosATL _man] call CLDW_fnc_move;
+        };
+    };
+    default { // "NONCOMBAT" (AL-6 Pelican, AR-2 Darter, Medical, Recon)
+        // Non-combat drones return to operator or recon at safe altitude - NEVER attack or dive
+        _drone setVariable ["CLDW_Disengaged", false, true];
+        _drone flyInHeight 40;
+        if (fileExists "DrongosDroneTweaks\Scripts\Drones\AI_Recon.sqf") then {
+            [_drone, _man] execVM "DrongosDroneTweaks\Scripts\Drones\AI_Recon.sqf";
+        } else {
+            [_drone, getPosATL _man] call CLDW_fnc_move;
+        };
     };
 };

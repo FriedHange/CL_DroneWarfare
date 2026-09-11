@@ -46,6 +46,9 @@ class CfgFunctions
             class move {};
             class disengage {};
             class droneGroupAlive {};
+            class isEnemy {};
+            class resolveDroneKiller {};
+            class getDroneRole {};
         };
     };
 };
