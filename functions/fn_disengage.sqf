@@ -112,6 +112,23 @@ while {alive _drone && {!isNull _drone} && {alive _man} && {!isNull _man} && {ti
     // Reached squad formation zone (< 25m)
     if (_distToMan <= 25) exitWith {};
 
+    // Altitude guard: flyInHeight is only a floor and the low forceSpeed governor can make the
+    // vanilla AI pilot pitch up and climb during the return flight; pull the drone back down
+    // if it drifts too far above its cruise altitude. forceSpeed is never re-asserted inside
+    // this loop, so a single correction persists for the whole return flight.
+    if (((getPosATL _drone) select 2) > (_cruiseAlt + 60)) then {
+        _drone forceSpeed -1;
+        _drone flyInHeight _cruiseAlt;
+        private _vel = velocity _drone;
+        if ((_vel select 2) > 2) then {
+            _drone setVelocity [_vel select 0, _vel select 1, (_vel select 2) * 0.2];
+        };
+        private _descentPos = getPosATL _man;
+        _descentPos set [2, _cruiseAlt];
+        (driver _drone) doMove _descentPos;
+        _drone doMove _descentPos;
+    };
+
     private _curManPos2D = [getPosATL _man select 0, getPosATL _man select 1, 0];
     private _lastMovePos = _drone getVariable ["CLDW_Disengage_LastPos", [0,0,0]];
     private _lastMoveTime = _drone getVariable ["CLDW_Disengage_LastTime", 0];

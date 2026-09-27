@@ -47,6 +47,7 @@ class CfgFunctions
             class disengage {};
             class droneGroupAlive {};
             class isEnemy {};
+            class isUndercoverProtected {};
             class resolveDroneKiller {};
             class getDroneRole {};
         };

@@ -65,6 +65,9 @@ if (_target isKindOf "CAManBase") then {
 
 if (_targetSide == sideUnknown || {_targetSide == civilian} || {_targetSide == sideLogic}) exitWith { false };
 
+// Undercover protection (Antistasi / Antistasi Ultimate): undercover (captive) targets are never enemies
+if ([_source, _target] call CLDW_fnc_isUndercoverProtected) exitWith { false };
+
 // Check hostility
 (([_sourceSide, _targetSide] call BIS_fnc_areFriendly) isEqualTo false) || 
 { (_sourceSide getFriend _targetSide < 0.6) || (_targetSide getFriend _sourceSide < 0.6) }

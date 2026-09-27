@@ -271,11 +271,23 @@ addMissionEventHandler ["EntityCreated", {
                 "i_tura_uav_02_ied_lxws"
             ] || {(_lowerDrone find "uav_02_ied" > -1) || {(_lowerDrone find "tura_uav" > -1)}};
 
+            private _operator = _drone getVariable ["CLDW_CurrentOperator", objNull];
+            if (isNull _operator) then { _operator = _drone getVariable ["CLDW_LastController", objNull]; };
+            if (isNull _operator) then { _operator = _drone getVariable ["ddtOwner", objNull]; };
+            if (!isNull _operator && {!isNull _target}) then {
+                _target setVariable ["CLDW_LastDroneAttacker", _operator, true];
+                _target setVariable ["CLDW_LastDroneAttackerTime", time, true];
+                _target setVariable ["CLDW_LastDroneAttackerSide", side group _operator, true];
+            };
+
             if (_isIEDDrone) exitWith {
                 if !(someAmmo _drone) exitWith { _drone setVariable ["ddtHasAmmo", false, true]; };
                 _drone setVariable ["ddtTargetPos", (getPosASL _target), true];
                 private _EH = _drone addEventHandler ["Fired", {
                     params ["_unit", "_weapon", "_muzzle", "_mode", "_ammo", "_magazine", "_projectile", "_gunner"];
+                    private _op = _unit getVariable ["CLDW_CurrentOperator", objNull];
+                    if (isNull _op) then { _op = _unit getVariable ["CLDW_LastController", objNull]; };
+                    if (!isNull _op) then { _projectile setVariable ["CLDW_CurrentOperator", _op, true]; };
                     [_projectile, _unit] spawn DDT_fnc_GuideToTarget3;
                     true
                 }];
@@ -303,6 +315,9 @@ addMissionEventHandler ["EntityCreated", {
             private _shellType = "G_40mm_HE";
             private _shell = createVehicle [_shellType, _shellPos, [], 0, "FLY"];
             _shell setVectorUp [0, 0.99, 0.01];
+            if (!isNull _operator) then {
+                _shell setVariable ["CLDW_CurrentOperator", _operator, true];
+            };
             [_shell, _target, 10] spawn DDT_fnc_GuideToTarget2;
 
             _drone setSpeedMode "NORMAL";
@@ -319,13 +334,13 @@ addMissionEventHandler ["EntityCreated", {
 
     // =========================================================================
     // RIS (Random Infantry Skirmish) Compatibility & Death Camera Sanitization
-    // Resolves drone kills back to the operator and prevents camera swing to [0,0,0]
+    // Resolves drone kills back to the operator and ensures kills count in scores
     // =========================================================================
     [] spawn {
         // Wait for mission functions to initialize (polling for up to 30 seconds)
         private _risDetected = false;
         for "_i" from 1 to 30 do {
-            if (!isNil "RSTF_fnc_playerKilled" || {!isNil "RSTF_fnc_unitKilled"} || {!isNil "RSTFM_fnc_playerKilled"} || {!isNil "RSTF_fnc_showDeath"}) exitWith {
+            if (!isNil "RSTF_fnc_playerKilled" || {!isNil "RSTF_fnc_unitKilled"} || {!isNil "RSTFM_fnc_playerKilled"} || {!isNil "RSTFM_fnc_unitKilled"} || {!isNil "RSTF_fnc_showDeath"}) exitWith {
                 _risDetected = true;
             };
             sleep 1;
@@ -333,22 +348,132 @@ addMissionEventHandler ["EntityCreated", {
 
         if (!_risDetected) exitWith {};
 
-        diag_log "CLDW: RIS mission detected. Registering drone kill sanitization handlers.";
+        diag_log "CLDW: RIS mission detected. Registering drone kill scoring and sanitization handlers.";
 
-        // Mission-level EntityKilled handler: Intercepts player and unit deaths immediately on both host and client
+        // Wrap RIS unit and vehicle killed handlers so drone attacks are credited to the operator
+        if (!isNil "RSTFM_fnc_unitKilled" && {isNil "CLDW_orig_RSTFM_fnc_unitKilled"}) then {
+            CLDW_orig_RSTFM_fnc_unitKilled = RSTFM_fnc_unitKilled;
+            RSTFM_fnc_unitKilled = {
+                params ["_killed", ["_killer", objNull], ["_instigator", objNull], ["_useEffects", true]];
+                private _resolved = [_killed, _killer, _instigator] call CLDW_fnc_resolveDroneKiller;
+                if (!isNull _resolved) then {
+                    _killer = _resolved;
+                    _instigator = _resolved;
+                };
+                _killed setVariable ["CLDW_RIS_Scored", true];
+                [_killed, _killer, _instigator, _useEffects] call CLDW_orig_RSTFM_fnc_unitKilled;
+            };
+        };
+
+        if (!isNil "RSTF_fnc_unitKilled" && {isNil "CLDW_orig_RSTF_fnc_unitKilled"}) then {
+            CLDW_orig_RSTF_fnc_unitKilled = RSTF_fnc_unitKilled;
+            RSTF_fnc_unitKilled = {
+                params ["_killed", ["_killer", objNull], ["_instigator", objNull], ["_useEffects", true]];
+                private _resolved = [_killed, _killer, _instigator] call CLDW_fnc_resolveDroneKiller;
+                if (!isNull _resolved) then {
+                    _killer = _resolved;
+                    _instigator = _resolved;
+                };
+                _killed setVariable ["CLDW_RIS_Scored", true];
+                [_killed, _killer, _instigator, _useEffects] call CLDW_orig_RSTF_fnc_unitKilled;
+            };
+        };
+
+        if (!isNil "RSTFM_fnc_vehicleKilled" && {isNil "CLDW_orig_RSTFM_fnc_vehicleKilled"}) then {
+            CLDW_orig_RSTFM_fnc_vehicleKilled = RSTFM_fnc_vehicleKilled;
+            RSTFM_fnc_vehicleKilled = {
+                params ["_killed", ["_killer", objNull], ["_instigator", objNull], ["_useEffects", true]];
+                private _resolved = [_killed, _killer, _instigator] call CLDW_fnc_resolveDroneKiller;
+                if (!isNull _resolved) then {
+                    _killer = _resolved;
+                    _instigator = _resolved;
+                };
+                _killed setVariable ["CLDW_RIS_Scored", true];
+                [_killed, _killer, _instigator, _useEffects] call CLDW_orig_RSTFM_fnc_vehicleKilled;
+            };
+        };
+
+        if (!isNil "RSTF_fnc_vehicleKilled" && {isNil "CLDW_orig_RSTF_fnc_vehicleKilled"}) then {
+            CLDW_orig_RSTF_fnc_vehicleKilled = RSTF_fnc_vehicleKilled;
+            RSTF_fnc_vehicleKilled = {
+                params ["_killed", ["_killer", objNull], ["_instigator", objNull], ["_useEffects", true]];
+                private _resolved = [_killed, _killer, _instigator] call CLDW_fnc_resolveDroneKiller;
+                if (!isNull _resolved) then {
+                    _killer = _resolved;
+                    _instigator = _resolved;
+                };
+                _killed setVariable ["CLDW_RIS_Scored", true];
+                [_killed, _killer, _instigator, _useEffects] call CLDW_orig_RSTF_fnc_vehicleKilled;
+            };
+        };
+
+        // Mission-level EntityKilled handler: Intercepts drone detonations, victim tagging, death cameras, and fallback scoring
         addMissionEventHandler ["EntityKilled", {
             params ["_unit", "_killer", "_instigator"];
-            if (!hasInterface) exitWith {};
 
-            // Check if killed unit is player or the recorded death victim
-            if (_unit == player || {_unit isEqualTo (missionNamespace getVariable ["RSTF_RESPAWN_KILLED", objNull])} || {_unit isEqualTo (missionNamespace getVariable ["RSTF_DEATH_BODY", objNull])}) then {
-                private _resolved = [_unit, _killer, _instigator] call CLDW_fnc_resolveDroneKiller;
-                if (!isNull _resolved && {alive _resolved} && {(_resolved distance [0,0,0]) > 150}) then {
-                    RSTF_RESPAWN_KILLER = _resolved;
-                    RSTF_DEATH_KILLER = _resolved;
-                } else {
-                    RSTF_RESPAWN_KILLER = objNull;
-                    RSTF_DEATH_KILLER = objNull;
+            // 1. Drone detonation tagging: When an active or player-controlled drone is destroyed/detonates,
+            // immediately tag all entities within blast radius so explosive casualties resolve to the operator
+            private _isDrone = (_unit isKindOf "UAV") || {unitIsUAV _unit} || {_unit getVariable ["CLDW_IsDroneCrew", false]} || {_unit getVariable ["ddtDrone", false]};
+            if (_isDrone) then {
+                private _op = _unit getVariable ["CLDW_CurrentOperator", objNull];
+                if (isNull _op) then { _op = _unit getVariable ["CLDW_LastController", objNull]; };
+                if (isNull _op) then { _op = _unit getVariable ["ddtOwner", objNull]; };
+                if (isNull _op) then {
+                    private _ctrl = uavControl _unit select 0;
+                    if (!isNull _ctrl && {alive _ctrl}) then { _op = _ctrl; };
+                };
+                if (!isNull _op && {alive _op}) then {
+                    private _opSide = side group _op;
+                    private _dronePos = getPosATL _unit;
+                    private _near = _dronePos nearEntities [["CAManBase", "LandVehicle", "Air", "Ship"], 35];
+                    {
+                        if (!isNull _x && {_x != _unit}) then {
+                            _x setVariable ["CLDW_LastDroneAttacker", _op, true];
+                            _x setVariable ["CLDW_LastDroneAttackerTime", time, true];
+                            _x setVariable ["CLDW_LastDroneAttackerSide", _opSide, true];
+                        };
+                    } forEach _near;
+                };
+            };
+
+            // 2. Player death camera sanitization on interface clients
+            if (hasInterface) then {
+                if (_unit == player || {_unit isEqualTo (missionNamespace getVariable ["RSTF_RESPAWN_KILLED", objNull])} || {_unit isEqualTo (missionNamespace getVariable ["RSTF_DEATH_BODY", objNull])}) then {
+                    private _resolved = [_unit, _killer, _instigator] call CLDW_fnc_resolveDroneKiller;
+                    if (!isNull _resolved && {alive _resolved} && {(_resolved distance [0,0,0]) > 150}) then {
+                        RSTF_RESPAWN_KILLER = _resolved;
+                        RSTF_DEATH_KILLER = _resolved;
+                    } else {
+                        RSTF_RESPAWN_KILLER = objNull;
+                        RSTF_DEATH_KILLER = objNull;
+                    };
+                };
+            };
+
+            // 3. Fallback Drone Kill Scoring for RIS (runs on server to ensure score authority)
+            if (isServer) then {
+                if (!(_unit getVariable ["CLDW_RIS_Scored", false])) then {
+                    private _resolved = [_unit, _killer, _instigator] call CLDW_fnc_resolveDroneKiller;
+                    if (!isNull _resolved) then {
+                        _unit setVariable ["CLDW_RIS_Scored", true];
+                        if (_unit isKindOf "CAManBase") then {
+                            if (!isNil "RSTFM_fnc_unitKilled") then {
+                                [_unit, _resolved, _resolved] call RSTFM_fnc_unitKilled;
+                            } else {
+                                if (!isNil "RSTF_fnc_unitKilled") then {
+                                    [_unit, _resolved, _resolved] call RSTF_fnc_unitKilled;
+                                };
+                            };
+                        } else {
+                            if (!isNil "RSTFM_fnc_vehicleKilled") then {
+                                [_unit, _resolved, _resolved] call RSTFM_fnc_vehicleKilled;
+                            } else {
+                                if (!isNil "RSTF_fnc_vehicleKilled") then {
+                                    [_unit, _resolved, _resolved] call RSTF_fnc_vehicleKilled;
+                                };
+                            };
+                        };
+                    };
                 };
             };
         }];
@@ -370,6 +495,14 @@ addMissionEventHandler ["EntityCreated", {
                         selectPlayer _previousUnit;
                         systemChat "CLDW: Prevented switching to UAV crew unit.";
                     };
+                };
+            }];
+
+            addMissionEventHandler ["UAVConnection", {
+                params ["_unit", "_uav", "_connected"];
+                if (_connected && !isNull _uav && !isNull _unit) then {
+                    _uav setVariable ["CLDW_CurrentOperator", _unit, true];
+                    _uav setVariable ["CLDW_LastController", _unit, true];
                 };
             }];
 
@@ -486,6 +619,13 @@ addMissionEventHandler ["EntityCreated", {
                 };
 
                 private _isControllingUAV = !isNull (getConnectedUAV _p);
+                if (_isControllingUAV) then {
+                    private _connUAV = getConnectedUAV _p;
+                    if ((_connUAV getVariable ["CLDW_CurrentOperator", objNull]) != _p) then {
+                        _connUAV setVariable ["CLDW_CurrentOperator", _p, true];
+                    };
+                    _connUAV setVariable ["CLDW_LastController", _p, true];
+                };
 
                 if (_isUAVCrew && !_isControllingUAV) then {
                     if (!isNull _lastValidPlayer && {alive _lastValidPlayer} && {_lastValidPlayer != _p}) then {
@@ -1177,6 +1317,47 @@ addMissionEventHandler ["EntityCreated", {
                                     if (!isNull _man && {alive _man} && {_drone distance _man > 40}) then {
                                         [_drone, getPosATL _man] call CLDW_fnc_move;
                                     };
+                                };
+                            };
+
+                            // Altitude guard: targetless loitering drones must never drift far above their
+                            // role cruise altitude. flyInHeight is only a floor ("fly at this height or higher")
+                            // and the low forceSpeed governors make vanilla AI pilots pitch up and climb to shed
+                            // excess speed, so idle drones can slowly balloon to extreme altitudes (1km+ loiters
+                            // observed on dedicated servers). Actively pull runaway loiterers back down.
+                            // Runs after the dispatch above so these are the last flight commands issued this tick.
+                            private _guardTarget = _drone getVariable ["CLDW_CurrentTarget", objNull];
+                            private _guardController = uavControl _drone select 0;
+                            private _guardEngaged = (_drone getVariable ["ddtBusy", false]) || {!isNull _guardTarget && {alive _guardTarget}} || {!isNull _guardController && {isPlayer _guardController}};
+                            if (!_guardEngaged) then {
+                                private _loiterAlt = switch (_role) do {
+                                    case "DROPPER": { 80 };
+                                    case "NONCOMBAT": { 40 };
+                                    default { 35 };
+                                };
+                                private _alt = (getPosATL _drone) select 2;
+                                if (_alt > (_loiterAlt + 60)) then {
+                                    // Cancel the slow-speed governor for this cycle so the pilot can descend
+                                    _drone forceSpeed -1;
+                                    _drone flyInHeight _loiterAlt;
+
+                                    // Kill upward momentum; hard descent for extreme excursions
+                                    private _vel = velocity _drone;
+                                    if (_alt > (_loiterAlt + 150)) then {
+                                        _drone setVelocity [_vel select 0, _vel select 1, -6];
+                                    } else {
+                                        if ((_vel select 2) > 2) then {
+                                            _drone setVelocity [_vel select 0, _vel select 1, (_vel select 2) * 0.2];
+                                        };
+                                    };
+
+                                    // Concrete 3D descent point at loiter altitude above the operator
+                                    private _descentPos = if (!isNull _man && {alive _man}) then { getPosATL _man } else { getPosATL _drone };
+                                    _descentPos set [2, _loiterAlt];
+                                    (driver _drone) doMove _descentPos;
+                                    _drone doMove _descentPos;
+
+                                    diag_log format ["CLDW [AltitudeGuard]: '%1' loitering at %2m (cruise %3m); commanded back to formation.", typeOf _drone, round _alt, _loiterAlt];
                                 };
                             };
                         };

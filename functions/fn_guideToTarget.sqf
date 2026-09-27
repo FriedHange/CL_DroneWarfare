@@ -232,6 +232,7 @@ private _smoothedInterceptPos = _targetPos;
 private _playerTookControl = false;
 private _diveAborted = false;
 private _emptyVehicleDisengaged = false;
+private _undercoverBreak = false;
 
 // =====================================
 // 3. MAIN GUIDANCE & ENGAGEMENT LOOP
@@ -354,6 +355,16 @@ while {!isNull _drone && {!isNull _target} && {alive _drone} && {!_diveAborted}}
             systemChat "CLDW: Target exceeded maximum engagement range.";
         };
     };
+
+    // Undercover protection (Antistasi / Antistasi Ultimate): break off if the live target
+    // became a mission-protected undercover unit (setCaptive true) while the drone was inbound.
+    // Shares the empty-check cadence below and never breaks off inside 25m terminal range.
+    if ((time >= _lastEmptyCheckTime + _emptyCheckInterval || {_lastEmptyCheckTime < 0}) && {_dist > 25}) then {
+        if ([_drone, _target] call CLDW_fnc_isUndercoverProtected) then {
+            _undercoverBreak = true;
+        };
+    };
+    if (_undercoverBreak) exitWith {};
 
     // 2. Empty Vehicle Check & Dismounted Passenger Priority (rate-limited to 3s for large battles)
     if ((time >= _lastEmptyCheckTime + _emptyCheckInterval || {_lastEmptyCheckTime < 0}) && {_dist > 25}) then {
@@ -739,6 +750,22 @@ if (_emptyVehicleDisengaged) exitWith {
     [_drone, _lastValidTargetPos, _man] spawn CLDW_fnc_disengage;
 };
 
+// Undercover break exit: the target is protected from engagement (e.g. the player went undercover
+// mid-attack); clear the assignment, pull up, and return to the squad.
+if (_undercoverBreak) exitWith {
+    _target setVariable ["CLDW_AssignedDrone", objNull, true];
+    _drone setVariable ["CLDW_CurrentTarget", objNull, true];
+    _drone setVariable ["CLDW_Disengaged", true, true];
+    _drone enableAI "PATH";
+
+    diag_log format ["CLDW [UndercoverBreak]: '%1' target '%2' is undercover-protected. Breaking off and returning to squad.", typeOf _drone, typeOf (vehicle _target)];
+    if (missionNamespace getVariable ["ddtDebug", false]) then {
+        systemChat format ["CLDW: Target %1 is undercover-protected. Breaking off!", typeOf (vehicle _target)];
+    };
+
+    [_drone, _lastValidTargetPos, _man] spawn CLDW_fnc_disengage;
+};
+
 // =====================================
 // 4. DIVE ABORTION / PULL-UP & RE-ENGAGEMENT
 // =====================================
@@ -860,9 +887,17 @@ if (_closeEnough) then {
     private _impactSide = if (!isNull _operator) then { side group _operator } else { sideUnknown };
 
     // Tag victims within 40m of drone impact point so kill handlers and death camera identify the operator
-    private _nearUnits = (nearestObjects [_drone, ["CAManBase"], 40]) + (nearestObjects [_target, ["CAManBase"], 40]);
+    private _nearUnits = (nearestObjects [_drone, ["CAManBase", "LandVehicle", "Air", "Ship"], 40]) + (nearestObjects [_target, ["CAManBase", "LandVehicle", "Air", "Ship"], 40]);
     if (!isNull _target && {!(_target in _nearUnits)}) then { _nearUnits pushBack _target; };
-    if (!isNull _targetVeh) then { _nearUnits append (crew _targetVeh); };
+    if (!isNull _targetVeh) then {
+        if !(_targetVeh in _nearUnits) then { _nearUnits pushBack _targetVeh; };
+        _nearUnits append (crew _targetVeh);
+    };
+    {
+        if (_x isKindOf "LandVehicle" || {_x isKindOf "Air"} || {_x isKindOf "Ship"}) then {
+            _nearUnits append (crew _x);
+        };
+    } forEach (+_nearUnits);
     _nearUnits = _nearUnits arrayIntersect _nearUnits;
 
     // Tag victims NOW, before detonation destroys/ragdolls them. Do not check alive _x so killed victims are tagged.
@@ -948,9 +983,18 @@ if (_closeEnough) then {
         if (!isNull _operator) then {
             private _impactSide = side group _operator;
             // Use drone position for spatial query — target is already dead here
-            private _nearUnits = if (alive _drone) then { nearestObjects [_drone, ["CAManBase"], 40] } else { [] };
+            private _dronePos = getPosATL _drone;
+            private _nearUnits = nearestObjects [_dronePos, ["CAManBase", "LandVehicle", "Air", "Ship"], 40];
             if (!isNull _target && {!(_target in _nearUnits)}) then { _nearUnits pushBack _target; };
-            if (!isNull (vehicle _target)) then { _nearUnits append (crew (vehicle _target)); };
+            if (!isNull (vehicle _target)) then {
+                if !(vehicle _target in _nearUnits) then { _nearUnits pushBack (vehicle _target); };
+                _nearUnits append (crew (vehicle _target));
+            };
+            {
+                if (_x isKindOf "LandVehicle" || {_x isKindOf "Air"} || {_x isKindOf "Ship"}) then {
+                    _nearUnits append (crew _x);
+                };
+            } forEach (+_nearUnits);
             _nearUnits = _nearUnits arrayIntersect _nearUnits;
             {
                 if (!isNull _x) then {

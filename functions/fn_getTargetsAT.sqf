@@ -259,6 +259,11 @@ private _validTargets = [];
                              { (_manSide getFriend _tSide < 0.6) || (_tSide getFriend _manSide < 0.6) };
             };
 
+            // Undercover protection (Antistasi / Antistasi Ultimate): skip targets the mission marked as undercover (captive)
+            if (_isHostile && {[_uav, _t] call CLDW_fnc_isUndercoverProtected}) then {
+                _isHostile = false;
+            };
+
             if (_isHostile) then {
                 private _dist = if (!isNull _uav) then { _uav distance _t } else { _operator distance _t };
                 if (_dist <= _range) then {

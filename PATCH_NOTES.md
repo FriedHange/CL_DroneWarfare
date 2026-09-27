@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Random Infantry Skirmish (RIS) Drone Kill Scoring & Attribution
+
+- Fixed drone kills not counting toward score, multi-kills, cash rewards, or weapon progression in RIS games:
+  - **Root Cause**: RIS processes scores and kills via `RSTFM_fnc_unitKilled` / `RSTFM_fnc_vehicleKilled`, which reads the killer from `param [2]` (`_instigator`). For drone detonations, explosive scripted charges, and UAV crashes, the engine reports `_instigator` as `objNull` (or a destroyed UAV hull whose side is `sideUnknown`), causing RIS to discard the kill event without invoking the gamemode score callbacks.
+  - **Function Wrapping**: Wrapped `RSTFM_fnc_unitKilled`, `RSTF_fnc_unitKilled`, `RSTFM_fnc_vehicleKilled`, and `RSTF_fnc_vehicleKilled` in `fn_droneLoop.sqf` to dynamically resolve the human or AI operator via `CLDW_fnc_resolveDroneKiller`, substituting the operator as both killer and instigator before delegating to RIS.
+  - **Gamemode Score & Progression Compatibility**: Correctly updates `RSTF_SCORE` for both Friendly and Enemy sides, awards player cash (`RSTFM_fnc_addPlayerMoney`), triggers kill popups ("+100 Kill"), tracks multi-kill streaks, and advances weapon progression in Gun Game mode (`RSTF_MODE_GUN_GAME_addKill`).
+  - **Drone Detonation Area Tagging**: When a drone is destroyed or detonates, all entities within a 35m radius are immediately tagged with `CLDW_LastDroneAttacker`, ensuring explosive splash casualties are reliably attributed to the operator even if the drone hull is deleted before victim death events fire.
+  - **Server-Authoritative Fallback**: Added a server-side safety check in `EntityKilled` (guarded by `CLDW_RIS_Scored`) to process any drone kills that did not trigger unit-level handlers, eliminating dropped kills without risk of double scoring.
+  - **Player UAV Connection Tracking**: Added a `UAVConnection` mission event handler and connection poller to ensure players manually flying drones via UAV terminals are tracked as `CLDW_CurrentOperator` and `CLDW_LastController`.
+  - **Bomber Ordnance Tagging**: Dropped bombs, shells, and fired IEDs in `DDT_fnc_GuideToTargetBomber` now inherit the operator so bomber drone kills are credited identically to FPV strikes.
+
+### Undercover-Aware Targeting (Antistasi / Antistasi Ultimate)
+
+- FPV and bomber drones now respect the Antistasi undercover mechanic:
+  - Antistasi (and Antistasi Ultimate) marks undercover players with `setCaptive true`, so `captive` is read as the live undercover state. Target validation in `getTargetsAT`, `getSoftTargets`, and `isEnemy` skips any unit (or vehicle carrying a captive crew member) the mission marked as undercover, and drones already on an attack run break off automatically and return to their squad.
+  - Vehicles carrying any undercover crew member are protected as a whole, so drones never detonate on civilian cars with undercover passengers. Captive-marked (surrendered) AI are likewise spared.
+  - Note: the engine also reports units concealed inside civilian vehicles as `captive`; those are protected as well, which matches Antistasi's civilian-vehicle concealment rules.
+- Antistasi Ultimate's **Rivals** faction is the deliberate exception for extra difficulty: Rivals recognise their own and keep hunting undercover operatives. Rival operators are identified by the mission-assigned `isRival` unit variable and `loadouts_riv_` unit-type prefix, which distinguishes them from conventional Occupants and Invaders even though Rivals share the east engine side with Invaders.
+- Cost is one `captive` check per candidate target per acquisition cycle; operator/faction resolution only runs for undercover candidates.
+
+### Loitering Altitude Guard (Performance)
+
+- Fixed the issue where targetless loitering drones slowly climbed to extreme altitudes (1km+ observed during long missions such as Antistasi, where squads idle in CARELESS mode for extended periods):
+  - Root cause: `flyInHeight` is only a floor for vanilla AI pilots ("fly at this height or higher") and nothing ever commands descent, while the low `forceSpeed` loiter governors make AI pilots pitch up and climb to shed excess speed. Idle drones therefore ballooned upward indefinitely.
+  - The idle monitor now actively commands any non-engaged drone that drifts more than 60m above its role cruise altitude (35m FPV / 40m recon / 80m dropper) back down: it cancels the speed governor for the cycle, re-asserts the cruise `flyInHeight`, damps upward momentum (hard descent for extreme excursions above 150m overage), and issues a descent `doMove` to loiter altitude above the operator.
+  - The same guard was added to the disengage return flight, where the speed governor previously remained active for up to 60 seconds.
+  - Active engagements (`ddtBusy` bombing runs), drones tracking live targets, and player-controlled UAVs are never interrupted by the guard.
+- Cost is negligible: a few position/velocity reads per drone per monitor tick.
+
 ### Dedicated Server Stability
 
 - Restricted AI inventory assignment, drone spawning, and drone guidance to the server so clients no longer run competing copies of the authoritative logic.
