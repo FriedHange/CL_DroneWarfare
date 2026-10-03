@@ -64,7 +64,7 @@ if (_man isKindOf "AllVehicles" && {!(_man isKindOf "Man")}) then {
 if (isNull _operator && isNull _uav) exitWith { [] };
 if (isNull _operator) then { _operator = _uav; };
 
-private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000];
+private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 750];
 private _range = if (_rangeInput > 0) then { _rangeInput min _maxRangeSetting } else { _maxRangeSetting };
 
 // Determine combat side
@@ -234,11 +234,16 @@ private _out = [];
                     if (_isInfantry) then {
                         _isSoftTarget = true;
                     } else {
-                        private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _v) >> "armor");
-                        private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} || {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} || {_v isKindOf "Air"} || {_armor <= (_threshold max 150)};
-                        private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} || {_v isKindOf "Wheeled_APC_F"};
-                        if (_isSoftVehicle && !_isHeavyArmor) then {
-                            _isSoftTarget = true;
+                        if (!isNull _uav && {[_uav] call CLDW_fnc_getDroneRole == 'SUICIDE'}) then {
+                            _isSoftTarget = [_uav,_v,true] call CLDW_fnc_canAttackVehicle;
+                        } else {
+                            private _armor = getNumber (configFile >> "CfgVehicles" >> typeOf _v >> "armor");
+                            private _isSoftVehicle = (_v isKindOf "Car") || {_v isKindOf "Truck"} ||
+                                {_v isKindOf "Motorcycle"} || {_v isKindOf "Ship"} ||
+                                {_v isKindOf "Air"} || {_armor <= (_threshold max 150)};
+                            private _isHeavyArmor = (_v isKindOf "Tank") || {_v isKindOf "APC"} ||
+                                {_v isKindOf "Wheeled_APC_F"};
+                            _isSoftTarget = _isSoftVehicle && {!_isHeavyArmor};
                         };
                     };
 
@@ -277,12 +282,6 @@ private _out = [];
                                                 (!isNull _operator && { _operator knowsAbout _v >= 0.8 });
 
                         private _checkStart = _eyeStart;
-                        if (!isNull _uav) then {
-                            // Drone climbs to 70m approach altitude upon launch; evaluate terrain LOS from vantage height
-                            private _uavATL = getPosATL _uav;
-                            private _climbNeeded = (70 - (_uavATL select 2)) max 0;
-                            _checkStart = (getPosASL _uav) vectorAdd [0, 0, _climbNeeded min 50];
-                        };
 
                         // 2. Terrain occlusion check
                         private _losBlocked = terrainIntersectASL [_checkStart, _eyeEnd];
@@ -303,7 +302,7 @@ private _out = [];
                             };
                         };
 
-                        if (!_losBlocked) then {
+                        if (!_losBlocked && {[(if (!isNull _uav) then {_uav} else {_operator}),_v] call CLDW_fnc_hasVisualTarget}) then {
                             _out pushBackUnique _v;
                         };
                     };
@@ -333,7 +332,6 @@ if !(_out isEqualTo []) then {
         } forEach _out;
         
         if (!isNull _closestTarget) then {
-            _uav setVariable ["CLDW_CurrentTarget", _closestTarget, true];
             _uav setVariable ["CLDW_CurrentOperator", _operator, true];
         };
     };

@@ -108,7 +108,7 @@
 [
 	"CLDW_Setting_ReplaceBackpacks",
 	"CHECKBOX",
-	["Replace Existing Backpacks", "If checked, the script will assign drone bags even to AI that already have backpacks (their old backpack will be deleted). If unchecked, only AI with empty back slots get drones."],
+	["Replace Existing Backpacks", "If checked, selected operators receive drone backpacks, replacing their old bags. If unchecked, operators keep their entire backpack and deploy from a finite scripted reserve. Applies to new assignments."],
 	["CL Drone Warfare", "Factions & Limits"],
 	false,
 	1
@@ -148,7 +148,7 @@
 [
 	"CLDW_Setting_DroneSpawnChance",
 	"SLIDER",
-	["Drone Spawn Chance (%)", "The probability of an eligible squad receiving and deploying a drone (0% = disabled, 100% = guaranteed)."],
+	["Drone Spawn Chance (%)", "One-time chance for an eligible squad to receive finite drone supplies (0% = disabled, 100% = guaranteed)."],
 	["CL Drone Warfare", "Drone Quotas"],
 	[0, 100, 30, 0],
 	1
@@ -171,7 +171,7 @@
 	"SLIDER",
 	["Max Drone Targeting Range (m)", "The maximum distance (in meters) the drone will scan and acquire targets."],
 	["CL Drone Warfare", "Flight Profile"],
-	[150, 5000, 2000, 0],
+		[150, 5000, 750, 0],
 	1
 ] call CBA_fnc_addSetting;
 
@@ -358,3 +358,17 @@ if (isServer) then {
 	CLDW_activeDrones = [];
 	CLDW_deployQueue = [];
 };
+
+["CLDW_Setting_MaxSquadStock", "SLIDER", ["Maximum Drones Per Squad", "Maximum total stock shared among selected operators, including equipped drone bags."], ["CL Drone Warfare", "Drone Quotas"], [1, 10, 4, 0], 1] call CBA_fnc_addSetting;
+
+["CLDW_Setting_MaxActiveGlobal", "SLIDER", ["Maximum Active Drones - Global", "Shared cap on living CLDW-deployed drones. Zero blocks new launches; existing drones remain."], ["CL Drone Warfare", "Drone Quotas"], [0, 100, 12, 0], 1] call CBA_fnc_addSetting;
+
+["CLDW_Setting_MaxActiveWest", "SLIDER", ["Maximum Active Drones - BLUFOR", "BLUFOR cap, also subject to the global limit. Zero blocks new launches."], ["CL Drone Warfare", "Drone Quotas"], [0, 100, 6, 0], 1] call CBA_fnc_addSetting;
+
+["CLDW_Setting_MaxActiveEast", "SLIDER", ["Maximum Active Drones - OPFOR", "OPFOR cap, also subject to the global limit. Zero blocks new launches."], ["CL Drone Warfare", "Drone Quotas"], [0, 100, 6, 0], 1] call CBA_fnc_addSetting;
+
+["CLDW_Setting_MaxActiveIndependent", "SLIDER", ["Maximum Active Drones - Independent", "Independent cap, also subject to the global limit. Zero blocks new launches."], ["CL Drone Warfare", "Drone Quotas"], [0, 100, 6, 0], 1] call CBA_fnc_addSetting;
+
+["CLDW_Setting_PredictionStrength", "SLIDER", ["FPV Prediction Strength (%)", "Scales target velocity lead. This is tracking capability, not a guaranteed hit percentage."], ["CL Drone Warfare", "Flight Profile"], [0, 100, 100, 0], 1] call CBA_fnc_addSetting;
+
+["CLDW_Setting_AimInterval", "SLIDER", ["FPV Aim Update Interval (Seconds)", "Time between aim recalculations. Flight smoothing and safety checks continue at their own rate."], ["CL Drone Warfare", "Flight Profile"], [0.05, 1, 0.1, 2], 1] call CBA_fnc_addSetting;

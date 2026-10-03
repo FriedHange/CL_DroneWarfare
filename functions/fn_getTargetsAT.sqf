@@ -65,7 +65,7 @@ if (_man isKindOf "AllVehicles" && {!(_man isKindOf "Man")}) then {
 if (isNull _operator && isNull _uav) exitWith { [] };
 if (isNull _operator) then { _operator = _uav; };
 
-private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 2000];
+private _maxRangeSetting = missionNamespace getVariable ["CLDW_Setting_MaxRange", 750];
 private _range = if (_rangeInput > 0) then { _rangeInput min _maxRangeSetting } else { _maxRangeSetting };
 
 DDT_fnc_getTargetsAT_version = 3;
@@ -120,27 +120,7 @@ if (!isNull _uav && {_droneSide == sideUnknown || {_droneSide == civilian}} && {
 // Determine drone payload (AP vs AT)
 private _isAPDrone = false;
 if (!isNull _uav) then {
-    private _uavClass = toLower (typeOf _uav);
-    if (
-        ("_ap" in _uavClass) || 
-        ("rkg" in _uavClass) || 
-        ("og7v" in _uavClass) || 
-        ("rc40" in _uavClass) || 
-        ("rc-40" in _uavClass) || 
-        ("_he" in _uavClass) ||
-        ("frag" in _uavClass) ||
-        ("personnel" in _uavClass) ||
-        ("crocus_ap" in _uavClass) ||
-        ("kvn_ap" in _uavClass)
-    ) then {
-        if (!("_at" in _uavClass) && !("pg7" in _uavClass)) then {
-            _isAPDrone = true;
-        };
-    } else {
-        if (("uafpv" in _uavClass || "fpv" in _uavClass) && !("_at" in _uavClass) && !("pg7" in _uavClass)) then {
-            _isAPDrone = true;
-        };
-    };
+    _isAPDrone = [_uav] call CLDW_fnc_isAPDrone;
 } else {
     private _bp = toLower (backpack _operator);
     if (("_ap" in _bp) || ("rkg" in _bp) || ("og7v" in _bp) || ("frag" in _bp)) then {
@@ -275,18 +255,13 @@ private _validTargets = [];
                             _isTargetValidType = true;
                         } else {
                             if (_isVehicle) then {
-                                private _armor = getNumber (configFile >> "CfgVehicles" >> (typeOf _t) >> "armor");
-                                private _isSoft = (_t isKindOf "Car") || {_t isKindOf "Truck"} || {_t isKindOf "Motorcycle"} || {_t isKindOf "Ship"} || {_t isKindOf "Air"} || {_armor <= (_threshold max 150)};
-                                private _isHeavy = (_t isKindOf "Tank") || {_t isKindOf "APC"} || {_t isKindOf "Wheeled_APC_F"};
-                                if (_isSoft && !_isHeavy) then {
-                                    _isTargetValidType = true;
-                                };
+                                _isTargetValidType = [_uav,_t,true] call CLDW_fnc_canAttackVehicle;
                             };
                         };
                     } else {
                         // AT Drone: combat vehicles with crew are primary
                         if (_isVehicle) then {
-                            _isTargetValidType = true;
+                            _isTargetValidType = [_uav,_t,false] call CLDW_fnc_canAttackVehicle;
                         } else {
                             // Dismounted passengers from combat vehicles are valid targets for AT drones
                             private _isDismounted = _isInfantry && {
@@ -334,12 +309,6 @@ private _validTargets = [];
                                                 (!isNull _operator && { _operator knowsAbout _t >= 0.8 });
 
                         private _checkStart = _eyeStart;
-                        if (!isNull _uav) then {
-                            // Drone climbs to 70m approach altitude upon launch; evaluate terrain LOS from vantage height
-                            private _uavATL = getPosATL _uav;
-                            private _climbNeeded = (70 - (_uavATL select 2)) max 0;
-                            _checkStart = (getPosASL _uav) vectorAdd [0, 0, _climbNeeded min 50];
-                        };
 
                         // 2. Terrain occlusion check
                         private _losBlocked = terrainIntersectASL [_checkStart, _eyeEnd];
@@ -360,7 +329,7 @@ private _validTargets = [];
                             };
                         };
 
-                        if (!_losBlocked) then {
+                        if (!_losBlocked && {[(if (!isNull _uav) then {_uav} else {_operator}),_t] call CLDW_fnc_hasVisualTarget}) then {
                             _validTargets pushBackUnique _t;
                         };
                     };
@@ -391,11 +360,6 @@ if (!_isAPDrone && _validTargets isEqualTo []) then {
                         private _isSquadTarget = (!isNull _opGrp && { _opGrp knowsAbout _t >= 0.8 }) ||
                                                 (!isNull _operator && { _operator knowsAbout _t >= 0.8 });
                         private _checkStart = _eyeStart;
-                        if (!isNull _uav) then {
-                            private _uavATL = getPosATL _uav;
-                            private _climbNeeded = (70 - (_uavATL select 2)) max 0;
-                            _checkStart = (getPosASL _uav) vectorAdd [0, 0, _climbNeeded min 50];
-                        };
                         if (!terrainIntersectASL [_checkStart, _eyeEnd]) then {
                             private _ignore1 = if (!isNull _uav) then { _uav } else { _operator };
                             private _hits = lineIntersectsSurfaces [_checkStart, _eyeEnd, _ignore1, _t, true, 1, "VIEW", "GEOM"];
@@ -407,11 +371,11 @@ if (!_isAPDrone && _validTargets isEqualTo []) then {
                                 };
                             };
                             if (!_hitBlocked) then {
-                                if (_isSquadTarget) then {
+                                if (_isSquadTarget && {[(if (!isNull _uav) then {_uav} else {_operator}),_t] call CLDW_fnc_hasVisualTarget}) then {
                                     _validTargets pushBackUnique _t;
                                 } else {
                                     private _vis = [_ignore1, "VIEW", _t] checkVisibility [_checkStart, _eyeEnd];
-                                    if (_vis >= 0.05) then {
+                                    if (_vis >= 0.05 && {[(if (!isNull _uav) then {_uav} else {_operator}),_t] call CLDW_fnc_hasVisualTarget}) then {
                                         _validTargets pushBackUnique _t;
                                     };
                                 };
@@ -474,16 +438,10 @@ private _refPos = if (!isNull _uav) then { getPosASL _uav } else { getPosASL _op
 
 if (isNull _selectedTarget) exitWith { [] };
 
-if (!isNull _operator && {_operator isKindOf "Man"}) then {
-    _operator reveal [_selectedTarget, 4];
-};
-
 if (!isNull _uav) then {
-    _uav reveal [_selectedTarget, 4];
     _uav doWatch _selectedTarget;
     
     _selectedTarget setVariable ["CLDW_AssignedDrone", _uav, true];
-    _uav setVariable ["CLDW_CurrentTarget", _selectedTarget, true];
     _uav setVariable ["CLDW_CurrentOperator", _operator, true];
 };
 

@@ -2,16 +2,115 @@
 
 ## Unreleased
 
+### Finite Squad Supply, Active Caps, and Owner-Local Control
+
+- Supplied squads now roll 1 to the configured maximum for operators and total
+  stock (defaults 2 operators and 4 drones). Minimum sliders were removed.
+  Exhaustion and casualties do not generate replacement supplies.
+- Disabled backpack replacement preserves operators' bags and uses scripted stock;
+  enabled replacement affects only selected operators.
+- Added simultaneous limits: 12 globally and 6 per side. Both are checked at launch;
+  blocked launches retain stock and queued requests rotate fairly.
+- Reconciled living CLDW drones into the server cap registry before launch checks;
+  zero launch stagger cannot bypass a faction cap. Rate-limited server logs show
+  effective counts when a launch is blocked.
+- UAV-terminal viewing no longer halts autonomous flight. Only a player taking
+  driver controls interrupts AI piloting.
+- Reduced default engagement range from 2000 m to 750 m. Acquisition requires
+  current visibility rather than projected altitude or squad knowledge
+  overriding cover. Lost-target FPVs search the last seen area for 60 seconds
+  using vanilla AI patrol orders at up to 35 km/h and about 30 m AGL before returning.
+  Infantry reacquisition resumes controlled attack guidance; a target
+  behind the drone triggers a slow, level turn before acceleration.
+- When the last confirmed position is in or beside a building, a lost-target
+  FPV inspects up to four nearby buildings within 60 m during the same one-minute
+  search. It sizes each perimeter to the building footprint, approaches a
+  clear exterior point before descending, and circles at about 6 m AGL. Clear
+  exterior passes aim for 55-70 km/h on a turn-safe radius, while blocked legs
+  widen around neighboring geometry. It still needs real line of sight before attacking.
+  KVN and Ukraine FPV can ignore native orders while other drones are active;
+  a slow, heading-aligned recovery activates only after seven seconds without progress.
+- Cleared stale target/controller intent when a loitering drone can no longer
+  validate it. During an attack, a drone keeps the last confirmed target position
+  for 10 seconds, with no more than two seconds of observed velocity prediction.
+  A close miss turns into another attack pass while the target remains visible;
+  hidden targets cannot trigger a blind terminal strike.
+  The original target or another visible enemy in the search area can be
+  acquired during the timed orbit.
+- FPV infantry attacks now choose a short, geometry-checked approach instead
+  of diving solely because the drone is close. Crocus, KVN, and Ukraine FPV
+  can slow down and enter a room when the soldier is visible through an opening
+  large enough for the drone. Blocked routes return to exterior search, and
+  emerging soldiers are checked at multiple visible body points. Building
+  geometry and native warhead behavior can still prevent a kill.
+- Building entry now samples low, hull-clear corridors around the actual
+  structure geometry, including buildings without indoor position markers.
+  It no longer adds a fixed roof-height staging climb before a visible indoor
+  strike. Guidance slows at the opening and checks the actual next motion
+  while turning into it. Open hangars can admit a close attack; narrow windows are rejected
+  when the drone cannot physically fit.
+- Outdoor infantry attacks now use short, obstacle-checked course corrections
+  near cover. They slow while finding a clear path through trees or around
+  walls and accelerate only on a verified direct corridor. Aborted attacks
+  enter search at the last confirmed position without a scripted 45 m pull-up
+  or reverse staging route. Search-to-attack handoffs share one 60-second
+  search window, so repeated brief sightings cannot restart it.
+- Infantry FPVs now stay on a verified hut-entry line through brief visibility
+  interruptions, checking their actual hull clearance throughout. Nearby
+  attacks are limited to 15 m/s outdoors and 8 m/s through narrow openings;
+  blocked entries brake before resuming exterior search. Search follows a
+  boarded target into a visible, occupied vehicle when payload rules allow it.
+  AP drones can target wheeled APCs and tracked IFVs, but not main battle tanks.
+- Low attack runs and scripted returns now sample the ground ahead, climb
+  before a hill crest, and slow when the remaining distance cannot support a
+  safe climb. A stalled attack disengages without the watchdog's upward
+  velocity kick; the bounded search fallback also checks rising terrain.
+- A CLDW drone retains its original AI operator identity during UAV-terminal
+  viewing. If that operator dies or despawns, the server retires its AI crew
+  on the current drone owner. The inert hull stays in place but releases its
+  active-drone slot; spent squad stock is not refunded.
+- Removed unconditional HC offloading. Flight and inventory run on their actual owner,
+  with controller and inventory-retry guards.
+- Added separate FPV prediction-strength and aim-refresh settings.
+- Improved fast-vehicle interception: longer AT lead, more closing speed and
+  tighter terminal turns. Vehicle aim now uses the bounding-box hull center,
+  and guidance continues until native hull contact instead of stopping above it.
+- Newly deployed drones receive an idle patrol order when no target is present.
+  Disengaging drones keep return priority until they reach the squad; recovery
+  searches no longer get interrupted by the regular target scan.
+- Idle Crocus, KVN, and Ukraine FPV drones use native AI waypoints. A stuck
+  native pilot gets a bounded order retry, then in-place pilot/group recovery;
+  scripted idle flight is removed; attack guidance and bounded search/return
+  recovery keep their existing scripted control.
+- Added an owner-local progress watchdog for CLDW FPV drones. If a drone makes
+  no progress for 12 seconds, it attempts to return; a stalled Crocus switches
+  to physical scripted return flight after six seconds of ignored native orders.
+  Continued failure replaces the AI pilot in place. If it still cannot move,
+  its pilot temporarily joins the operator's squad until the drone flies within
+  35 m, then separates into a UAV group. Recovery never teleports a living drone
+  and keeps the same hull, stock, and cap slot. A missing pilot is replaced
+  after a five-second grace period; player-controlled and jammed drones are exempt.
+- Added inspected Sania (3147611501) and EW Drone Jammer (3804407201) adapters.
+  The supplied latter mod is not Electronic Warfare REDUX; older Redux remains unverified.
+- Native crew death and suppression stop scripted flight. Removed artificial vehicle
+  damage that bypassed native warhead/fuze behavior.
+- Cached pools/roles, staggered work, moved collision setup out of repeated pair scans,
+  and corrected wreck cleanup ordering.
+- Added an isolated dedicated-server regression suite. See UPDATE_GUIDE.md for
+  settings, integration API, persistence limits, and multiplayer acceptance checks.
+
+
 ### Random Infantry Skirmish (RIS) Drone Kill Scoring & Attribution
 
-- Fixed drone kills not counting toward score, multi-kills, cash rewards, or weapon progression in RIS games:
-  - **Root Cause**: RIS processes scores and kills via `RSTFM_fnc_unitKilled` / `RSTFM_fnc_vehicleKilled`, which reads the killer from `param [2]` (`_instigator`). For drone detonations, explosive scripted charges, and UAV crashes, the engine reports `_instigator` as `objNull` (or a destroyed UAV hull whose side is `sideUnknown`), causing RIS to discard the kill event without invoking the gamemode score callbacks.
-  - **Function Wrapping**: Wrapped `RSTFM_fnc_unitKilled`, `RSTF_fnc_unitKilled`, `RSTFM_fnc_vehicleKilled`, and `RSTF_fnc_vehicleKilled` in `fn_droneLoop.sqf` to dynamically resolve the human or AI operator via `CLDW_fnc_resolveDroneKiller`, substituting the operator as both killer and instigator before delegating to RIS.
-  - **Gamemode Score & Progression Compatibility**: Correctly updates `RSTF_SCORE` for both Friendly and Enemy sides, awards player cash (`RSTFM_fnc_addPlayerMoney`), triggers kill popups ("+100 Kill"), tracks multi-kill streaks, and advances weapon progression in Gun Game mode (`RSTF_MODE_GUN_GAME_addKill`).
-  - **Drone Detonation Area Tagging**: When a drone is destroyed or detonates, all entities within a 35m radius are immediately tagged with `CLDW_LastDroneAttacker`, ensuring explosive splash casualties are reliably attributed to the operator even if the drone hull is deleted before victim death events fire.
-  - **Server-Authoritative Fallback**: Added a server-side safety check in `EntityKilled` (guarded by `CLDW_RIS_Scored`) to process any drone kills that did not trigger unit-level handlers, eliminating dropped kills without risk of double scoring.
-  - **Player UAV Connection Tracking**: Added a `UAVConnection` mission event handler and connection poller to ensure players manually flying drones via UAV terminals are tracked as `CLDW_CurrentOperator` and `CLDW_LastController`.
-  - **Bomber Ordnance Tagging**: Dropped bombs, shells, and fired IEDs in `DDT_fnc_GuideToTargetBomber` now inherit the operator so bomber drone kills are credited identically to FPV strikes.
+- RIS squads that exhaust their stock can receive another allocation after 120 seconds,
+  once their active drones have gone. New allocations still honor the spawn chance,
+  operator limit, stock maximum, and live-drone caps.
+- Removed the extra RIS score callback from `EntityKilled`. The installed RIS build
+  declares its kill handlers `final`, so attempts to wrap them were rejected and the
+  fallback could award duplicate kills. RIS now owns scoring; drone credit should be
+  checked separately in the running mission.
+- Drone detonation tagging and player UAV connection tracking remain for death-camera
+  attribution.
 
 ### Undercover-Aware Targeting (Antistasi / Antistasi Ultimate)
 

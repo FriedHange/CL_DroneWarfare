@@ -1,0 +1,32 @@
+version=12;
+class Mission {
+    addOns[]={"A3_Characters_F_BLUFOR","A3_Map_VR"};
+    addOnsAuto[]={"A3_Characters_F_BLUFOR","A3_Map_VR"};
+    randomSeed=1;
+    class Intel {year=2035; month=6; day=24; hour=12; minute=0;};
+    class Groups {
+        items=2;
+        class Item0 {
+            side="WEST";
+            class Vehicles {
+                items=1;
+                class Item0 {
+                    position[]={1000,0,1000};
+                    id=0; side="WEST"; vehicle="B_Soldier_F";
+                    player="PLAYER COMMANDER"; skill=0.6;
+                };
+            };
+        };
+        class Item1 {
+            side="LOGIC";
+            class Vehicles {
+                items=1;
+                class Item0 {
+                    position[]={1005,0,1005};
+                    id=1; side="LOGIC"; vehicle="HeadlessClient_F";
+                    player="PLAY CDG"; skill=0.6;
+                };
+            };
+        };
+    };
+};

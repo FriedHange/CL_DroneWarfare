@@ -1,6 +1,11 @@
 params [["_drone", objNull], ["_man", objNull]];
 
 if (isNull _drone) exitWith { false };
+if (_drone getVariable ["CLDW_Orphaned",false]) exitWith {false};
+private _assigned = _drone getVariable ["CLDW_AssignedOperator",objNull];
+if (_drone getVariable ["CLDW_OperatorBound",false] &&
+    {isNull _assigned || {!alive _assigned}}) exitWith {false};
+if (_drone getVariable ["CLDW_OperatorBound",false]) then {_man = _assigned;};
 
 // Resolve operator dynamically if dead/null (teleport/despawn guard)
 if (isNull _man || {!alive _man}) then {

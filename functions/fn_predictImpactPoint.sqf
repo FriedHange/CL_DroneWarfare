@@ -14,7 +14,9 @@ params [
 if (isNull _drone || {isNull _target}) exitWith { [0, 0, 0] };
 
 private _targetVehicle = vehicle _target;
-private _targetPos = AGLToASL (_targetVehicle modelToWorldVisual (boundingCenter _targetVehicle));
+private _box = boundingBoxReal _targetVehicle;
+private _modelCenter = ((_box select 0) vectorAdd (_box select 1)) vectorMultiply 0.5;
+private _targetPos = AGLToASL (_targetVehicle modelToWorldVisual _modelCenter);
 
 // Aim at vehicle center of mass (bounding center) clamped above ground level
 if !(_target isKindOf "CAManBase") then {
@@ -28,9 +30,9 @@ private _velocityMagnitude = vectorMagnitude _targetVelocity;
 
 // Exit with current center position if target is infantry walking slowly or stationary vehicle
 if (_target isKindOf "CAManBase") then {
-    if (abs speed _targetVehicle < 15) exitWith { _targetPos };
+    if (_velocityMagnitude < (15 / 3.6)) exitWith { _targetPos };
 } else {
-    if (abs speed _targetVehicle < _fastTargetThreshold || {_velocityMagnitude < 0.3}) exitWith { _targetPos };
+    if (_velocityMagnitude < (_fastTargetThreshold max 0.3)) exitWith { _targetPos };
 };
 
 // Calculate exact quadratic time-to-intercept for moving target
@@ -57,7 +59,8 @@ if (_timeToImpact <= 0) then {
 };
 
 _timeToImpact = (_timeToImpact min (_predictionTimeCap max 0)) max 0;
-private _velocityLead = _targetVelocity vectorMultiply _timeToImpact;
-private _forwardLead = (vectorNormalized _targetVelocity) vectorMultiply (_leadOffset max 0);
+private _strength = ((missionNamespace getVariable ["CLDW_Setting_PredictionStrength", 100]) max 0 min 100) / 100;
+private _velocityLead = _targetVelocity vectorMultiply (_timeToImpact * _strength);
+private _forwardLead = (vectorNormalized _targetVelocity) vectorMultiply ((_leadOffset max 0) * _strength);
 
 (_targetPos vectorAdd _velocityLead) vectorAdd _forwardLead
